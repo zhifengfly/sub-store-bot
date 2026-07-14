@@ -840,11 +840,14 @@ async function onMsg(msg, env) {
   // 读取 KV 累计状态
   let accState = isRemote ? null : (await getAccState(uid, env));
 
-  // 远程订阅 → 清累计；本地订阅 → 合并
+  // 远程订阅 → 清累计；本地订阅 → 替换（每次新内容重置，不自动合并）
   if (isRemote) {
     await clearAccState(uid, env);
-  } else if (accState && accState.proxies && accState.proxies.length > 0) {
-    proxies = deduplicateProxies([...accState.proxies, ...(proxies || [])]);
+  } else {
+    if (accState && accState.proxies && accState.proxies.length > 0) {
+      await clearAccState(uid, env);
+    }
+    // proxies 只包含本次输入的节点，不做合并
   }
 
   // 混合内容：标准节点 + Gost
