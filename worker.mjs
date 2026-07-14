@@ -837,11 +837,19 @@ async function onMsg(msg, env) {
   }
   }
 
-  // 读取 KV 累计状态
-  let accState = isRemote ? null : (await getAccState(uid, env));
+  // 本地订阅内存累计（多文件追加，同实例内有效）
+  if (!isRemote && u._accProxies && u._accProxies.length > 0) {
+    proxies = deduplicateProxies([...u._accProxies, ...(proxies || [])]);
+  }
 
-  // 每次新内容重置（远程/本地都清）
-  await clearAccState(uid, env);
+  // 远程 → 清累计
+  if (isRemote) {
+    await clearAccState(uid, env);
+    u._accProxies = null;
+    u._fmtMsg = null;
+  }
+
+  // 每次新输入清内存残留统计
   u._lastStats = null;
   u._lastUrlCount = null;
 
@@ -850,21 +858,28 @@ async function onMsg(msg, env) {
 
   // 纯 Gost（无标准节点）
   if (gostLines.length > 0 && (!proxies || proxies.length === 0)) {
-    u._lastSubInput = subText; // 已去掉 Gost 行，存标准部分
-    u._gostInput = gostLines.join('\n');
-    u._lastProxies = [];
-    u._isGost = true;
-    u._gostCount = gostLines.length;
-    return replyOrEdit(u, cid, env, {
-      text:
-        '\u{1F504} <b>\u68C0\u6D4B\u5230\u8BA2\u9605\u5185\u5BB9</b>\n\n' +
-        '\u{1F4CA} \u8282\u70B9\u6570: <b>' + gostLines.length + '</b>\n' +
-        '\u{1F4CD} Gost Tunnel: ' + gostLines.length + '\n' +
-        '\u26A0\uFE0F \u4EC5 Shadowrocket / URI \u5217\u8868\u652F\u6301 Gost Tunnel\n\n' +
-        '\u8BF7\u9009\u62E9\u8F93\u51FA\u683C\u5F0F:',
-      parse_mode: 'HTML',
-      reply_markup: fmtKb(FORMAT_OPTIONS.filter(f => GOST_FORMATS.includes(f.id)), u._convTtl, u.ttl),
-    });
+    // 如果之前有累计的标准节点，保留累计，只追加 gost
+    if (u._accProxies && u._accProxies.length > 0) {
+      // 已有标准节点，只追加 gostLines
+      u._gostInput = (u._gostInput || '') + '\n' + gostLines.join('\n');
+      proxies = u._accProxies;
+    } else {
+      u._lastSubInput = subText;
+      u._gostInput = gostLines.join('\n');
+      u._lastProxies = [];
+      u._isGost = true;
+      u._gostCount = gostLines.length;
+      return replyOrEdit(u, cid, env, {
+        text:
+          '\u{1F504} <b>\u68C0\u6D4B\u5230\u8BA2\u9605\u5185\u5BB9</b>\n\n' +
+          '\u{1F4CA} \u8282\u70B9\u6570: <b>' + gostLines.length + '</b>\n' +
+          '\u{1F4CD} Gost Tunnel: ' + gostLines.length + '\n' +
+          '\u26A0\uFE0F \u4EC5 Shadowrocket / URI \u5217\u8868\u652F\u6301 Gost Tunnel\n\n' +
+          '\u8BF7\u9009\u62E9\u8F93\u51FA\u683C\u5F0F:',
+        parse_mode: 'HTML',
+        reply_markup: fmtKb(FORMAT_OPTIONS.filter(f => GOST_FORMATS.includes(f.id)), u._convTtl, u.ttl),
+      });
+    }
   }
 
   if (!proxies || proxies.length === 0) {
@@ -944,10 +959,10 @@ async function onMsg(msg, env) {
       (u._lastStats.dupNodes > 0 ? ', \u91CD\u590D\u8282\u70B9: ' + u._lastStats.dupNodes : '') + ')'
     : '';
 
-  if (!isRemote && accState && accState.fmtMsg && accState.fmtMsg.id) {
+  if (!isRemote && u._fmtMsg && u._fmtMsg.id) {
     await tg('editMessageText', env.BOT_TOKEN, {
-      chat_id: accState.fmtMsg.cid,
-      message_id: accState.fmtMsg.id,
+      chat_id: u._fmtMsg.cid,
+      message_id: u._fmtMsg.id,
       text:
         '\u{1F504} <b>\u68C0\u6D4B\u5230\u8BA2\u9605\u5185\u5BB9</b>\n\n' +
         (statsLine ? '' : '\u{1F4CA} \u8282\u70B9\u6570: <b>' + proxies.length + '</b>\n') +
@@ -960,7 +975,7 @@ async function onMsg(msg, env) {
       parse_mode: 'HTML',
       reply_markup: fmtKb(null, u._convTtl, u.ttl),
     });
-    if (!isRemote) await saveAccState(uid, env, { proxies, fmtMsg: accState.fmtMsg });
+    if (!isRemote) u._accProxies = proxies;
   } else {
     const sent = await replyOrEdit(u, cid, env, {
       text:
@@ -975,11 +990,11 @@ async function onMsg(msg, env) {
       parse_mode: 'HTML',
       reply_markup: fmtKb(null, u._convTtl, u.ttl),
     });
-    const msgId = sent?.result?.message_id || (sent?.from_edit ? u.promptMid : null);
-    if (!isRemote) await saveAccState(uid, env, {
-      proxies,
-      fmtMsg: msgId ? { cid: cid, id: msgId } : null,
-    });
+    if (!isRemote) {
+      const msgId = sent?.result?.message_id || (sent?.from_edit ? u.promptMid : null);
+      u._fmtMsg = msgId ? { cid: cid, id: msgId } : null;
+      u._accProxies = proxies;
+    }
   }
 }
 
