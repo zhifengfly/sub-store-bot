@@ -840,15 +840,10 @@ async function onMsg(msg, env) {
   // 读取 KV 累计状态
   let accState = isRemote ? null : (await getAccState(uid, env));
 
-  // 远程订阅 → 清累计；本地订阅 → 替换（每次新内容重置，不自动合并）
-  if (isRemote) {
-    await clearAccState(uid, env);
-  } else {
-    if (accState && accState.proxies && accState.proxies.length > 0) {
-      await clearAccState(uid, env);
-    }
-    // proxies 只包含本次输入的节点，不做合并
-  }
+  // 每次新内容重置（远程/本地都清）
+  await clearAccState(uid, env);
+  u._lastStats = null;
+  u._lastUrlCount = null;
 
   // 混合内容：标准节点 + Gost
   const isMixed = gostLines.length > 0 && proxies && proxies.length > 0;
@@ -965,7 +960,7 @@ async function onMsg(msg, env) {
       parse_mode: 'HTML',
       reply_markup: fmtKb(null, u._convTtl, u.ttl),
     });
-    await saveAccState(uid, env, { proxies, fmtMsg: accState.fmtMsg });
+    if (!isRemote) await saveAccState(uid, env, { proxies, fmtMsg: accState.fmtMsg });
   } else {
     const sent = await replyOrEdit(u, cid, env, {
       text:
@@ -981,7 +976,7 @@ async function onMsg(msg, env) {
       reply_markup: fmtKb(null, u._convTtl, u.ttl),
     });
     const msgId = sent?.result?.message_id || (sent?.from_edit ? u.promptMid : null);
-    await saveAccState(uid, env, {
+    if (!isRemote) await saveAccState(uid, env, {
       proxies,
       fmtMsg: msgId ? { cid: cid, id: msgId } : null,
     });
