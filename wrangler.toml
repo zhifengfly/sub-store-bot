@@ -8,6 +8,13 @@ compatibility_flags = ["nodejs_compat"]
 [[kv_namespaces]]
 binding = "KV"
 
+<<<<<<< Updated upstream
+=======
+[vars]
+ALLOWED_USERS = "允许的用户 ID（逗号分隔），不设则全部开放"
+BOT_TOKEN = "Telegram Bot Token"
+# CLIP_URL = "这个进去之后再设置成路由到worker的域名"
+>>>>>>> Stashed changes
 # 短链域名 — 部署后在 Cloudflare Dashboard 设置
 # 类型: plain_text
 # 值: https://your-domain.workers.dev
