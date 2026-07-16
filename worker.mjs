@@ -1567,7 +1567,44 @@ export default {
       }
     }
 
-    // Health
+    // 根路由：自动激活 webhook + 注册命令（参考 glados-discourse-bot）
+    if (url.pathname === '/' || url.pathname === '/setup') {
+      const setupResult = { webhook: false, commands: false };
+      if (env.BOT_TOKEN) {
+        try {
+          const wh = `${url.protocol}//${url.hostname}/webhook`;
+          const r1 = await fetch(`https://api.telegram.org/bot${env.BOT_TOKEN}/setWebhook?url=${wh}`);
+          setupResult.webhook = (await r1.json()).ok === true;
+
+          const r2 = await fetch(`https://api.telegram.org/bot${env.BOT_TOKEN}/setMyCommands`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              commands: [
+                { command: 'start', description: '启动 / 主页' },
+              ],
+            }),
+          });
+          setupResult.commands = (await r2.json()).ok === true;
+        } catch (e) { setupResult.error = e.message; }
+      }
+      return new Response(
+        JSON.stringify({
+          service: 'sub-store-bot',
+          version: '3.0',
+          bot: typeof env.BOT_TOKEN !== 'undefined',
+          clipUrl: env.CLIP_URL || '',
+          engine: 'Sub-Store',
+          formats: FORMAT_OPTIONS.map(f => f.id),
+          webhook: setupResult.webhook ? '✅ 已激活' : '❌ 未激活',
+          commands: setupResult.commands ? '✅ 已注册' : '⚠️ 未注册',
+          setupError: setupResult.error || null,
+        }),
+        { headers: { 'Content-Type': 'application/json', ...cors } }
+      );
+    }
+
+    // Health (fallback)
     return new Response(
       JSON.stringify({
         service: 'sub-store-bot',
