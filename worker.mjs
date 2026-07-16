@@ -48,6 +48,7 @@ function mainKb() {
         { text: '\u{23F1} 有效期', callback_data: 'ttl_menu' },
       ],
       [
+        { text: '\u{1F3A8} 重命名', callback_data: 'rn_menu' },
         { text: '\u{1F4CB} 我的短链', callback_data: 'my_links_0' },
       ],
     ],
@@ -64,15 +65,16 @@ const FORMAT_OPTIONS = [
   { id: 'qx', label: 'Quantumult X' },
   { id: 'shadowrocket', label: 'Shadowrocket' },
   { id: 'surge', label: 'Surge' },
-  { id: 'loon', label: 'Loon' },
+  { id: 'Loon', label: 'Loon' },
   { id: 'stash', label: 'Stash' },
   { id: 'egern', label: 'Egern' },
+  { id: 'b64', label: 'Base64' },
 ];
 
 // Gost Tunnel 仅支持的格式
 const GOST_FORMATS = ['shadowrocket', 'uri'];
 
-function fmtKb(allowed, convTtl, ttlDefault) {
+function fmtKb(allowed, convTtl, ttlDefault, u) {
   const formats = allowed || FORMAT_OPTIONS;
   const rows = [];
   let row = [];
@@ -86,7 +88,12 @@ function fmtKb(allowed, convTtl, ttlDefault) {
   if (row.length) rows.push(row);
   const ttlVal = convTtl !== undefined && convTtl !== null ? convTtl : (ttlDefault !== undefined ? ttlDefault : 0);
   const ttlLabel = ttlVal === 0 ? '\u6C38\u4E0D\u8FC7\u671F' : ttlVal < 3600 ? Math.round(ttlVal / 60) + '\u5206\u949F' : Math.round(ttlVal / 3600) + '\u5C0F\u65F6';
+  // 重命名状态
+  const rnMode = u?._renameMode || 'off';
+  const rnLabels = { off: '关', dedup: '去同名', creative: '创意' };
+  const rnStatus = rnLabels[rnMode] || '关';
   rows.push([{ text: '\u23F1 \u6642\u6548: ' + ttlLabel, callback_data: 'conv_ttl_menu' }]);
+  rows.push([{ text: '\u{1F3A8} \u91CD\u547D\u540D: ' + rnStatus, callback_data: 'conv_rn_menu' }]);
   rows.push([{ text: '\u2190 返回', callback_data: 'menu' }]);
   return { inline_keyboard: rows };
 }
@@ -113,7 +120,8 @@ function ttlKb(current, prefix) {
     }
   }
   if (row.length) rows.push(row);
-  rows.push([{ text: '\u2190 返回', callback_data: 'menu' }]);
+  const backCb = prefix && prefix.startsWith('chg_ttl_') ? 'link_' + prefix.slice(8, -1) : 'menu';
+  rows.push([{ text: '\u2190 \u8FD4\u56DE', callback_data: backCb }]);
   return { inline_keyboard: rows };
 }
 
@@ -173,7 +181,13 @@ function mainPageText() {
 const stateMap = new Map();
 
 function getState(uid) {
-  if (!stateMap.has(uid)) stateMap.set(uid, { _uid: uid });
+  if (!stateMap.has(uid)) {
+    if (stateMap.size >= 100) {
+      const first = stateMap.keys().next().value;
+      stateMap.delete(first);
+    }
+    stateMap.set(uid, { _uid: uid, _renameMode: 'off', _renamePool: 0, _renamePrefix: '', _renameSuffix: '', _regionCache: {} });
+  }
   return stateMap.get(uid);
 }
 
@@ -302,6 +316,28 @@ async function fetchSub(url, uid, env) {
       } catch { /* parse fail, skip */ }
     }
   }
+  // 直连全失败 → 走反代（绕过 CF Worker 被 CF 防护拦截）
+  if (!bestText && env.PROXY_URL) {
+    try {
+      const proxyUrl = env.PROXY_URL + encodeURIComponent(url);
+      const proxyText = await Promise.race([
+        fetch(proxyUrl).then(r => r.text()),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('proxy timeout')), 15000)),
+      ]);
+      if (proxyText && proxyText.length >= 50 && !proxyText.includes('<html') && !proxyText.includes('Just a moment')) {
+        try {
+          const parsed = ProxyUtils.parse(proxyText);
+          const count = parsed?.length || 0;
+          if (count > 0) {
+            bestText = proxyText;
+            bestUa = 'proxy';
+            bestCount = count;
+            bestParsed = parsed;
+          }
+        } catch { /* parse fail */ }
+      }
+    } catch { /* proxy fail, ignore */ }
+  }
   return { text: bestText, ua: bestUa, count: bestCount, proxies: bestParsed };
 }
 
@@ -345,7 +381,7 @@ function deduplicateProxies(proxies) {
     switch (p.type) {
       case 'vmess':
       case 'vless':
-        key = p.server + ':' + p.port + ':' + p.type + ':' + p.uuid;
+        key = p.server + ':' + p.port + ':' + p.type + ':' + (p.uuid || '') + ':' + (p.sni || '') + ':' + ((p['ws-opts']?.path || p.path || '')) + ':' + (p.network || '');
         break;
       case 'ss':
         key = p.server + ':' + p.port + ':' + p.type + ':' + p.password + ':' + p.cipher;
@@ -364,6 +400,155 @@ function deduplicateProxies(proxies) {
     seen.add(key);
     return true;
   });
+}
+
+// ==================== 重命名配置（KV 持久化） ====================
+
+async function getRenameConfig(uid, env) {
+  try {
+    const raw = await env.KV.get('rn:' + uid, { type: 'json' });
+    return raw || { mode: 'off', pool: 0, prefix: '', suffix: '' };
+  } catch { return { mode: 'off', pool: 0, prefix: '', suffix: '' }; }
+}
+
+async function saveRenameConfig(uid, env, cfg) {
+  await env.KV.put('rn:' + uid, JSON.stringify(cfg));
+}
+
+// ==================== 重命名 ====================
+
+// 内置主题模版（type: 1=主轮换+兜底, 2=单数组）
+const RENAME_POOLS = [
+  { id: 'zodiac', label: '生肖', type: 1, primary: ['子鼠','丑牛','寅虎','卯兔','辰龙','巳蛇','午马','未羊','申猴','酉鸡','戌狗','亥猪'], fallback: ['乾','兑','离','震','巽','坎','艮','坤'] },
+  { id: 'solar', label: '节气', type: 1, primary: ['立春','雨水','惊蛰','春分','清明','谷雨','立夏','小满','芒种','夏至','小暑','大暑','立秋','处暑','白露','秋分','寒露','霜降','立冬','小雪','大雪','冬至','小寒','大寒'], fallback: ['宰相','尚书','侍郎','郎中','员外郎','御史','太守','刺史','县令','主簿','司空','司徒','司马','太尉','中书令','门下侍中','尚书令','给事中','谏议大夫','大夫','卿','将军','校尉','都督'] },
+  { id: 'chihuo', label: '吃货', type: 1, primary: ['凤凰趴窝','龙肝凤髓','红烧麒麟面','红梅珠香','宫保野兔','祥龙双飞','爆炒田鸡','芫爆仔鸽','金丝烧麦','佛手金卷','龙凤柔情','明珠豆腐','砂锅煨鹿筋','红烧猴头蘑','鸡丝银耳','桂花鱼条','八宝兔酱','玉笋蕨菜','罗汉大虾','花菇鸭掌','五彩牛柳','挂炉走油鸡','麻辣牛肉','红烧鲍鱼','清蒸鳜鱼','松鼠鳜鱼','翠玉豆糕','栗子糕','双色豆糕','如意卷','绣球乾贝','炒珍珠鸡','奶汁鱼片','干连福海参','花菇鲟龙鱼','龙舟镢鱼','滑溜贝球','酱焖鹌鹑','蟹肉双笋丝','砂锅鱼翅','红烧鸡棕菌','牡丹银耳汤','清汤燕窝','凤尾鱼翅','金蟾玉鲍','一品鲍鱼羹','龙井竹荪','玉掌献寿','鸡枞菌汤','草菇西兰花','杏仁豆腐','挂炉烤鸭','燕窝八珍汤','桂花糕','荷花酥','莲子糕','杏仁露','冰糖银耳','拔丝苹果','一品官燕','奶汤蒲菜','御膳八珍','红烧肘子','清蒸龙虾'], fallback: ['天命','天聪','崇德','顺治','康熙','雍正','乾隆','嘉庆','道光','咸丰','同治','光绪','宣统','努尔哈赤','皇太极','多尔衮','孝庄','康熙帝','雍正帝','乾隆帝','和珅','嘉庆帝','道光帝','咸丰帝','慈禧','同治帝','光绪帝','溥仪'] },
+  { id: 'random', label: '随机', type: 3, primary: [] },
+];
+
+// ====== 主题模版 KV 持久化 ======
+async function getThemes(uid, env) {
+  try {
+    const raw = await env.KV.get('rn_themes:' + uid, { type: 'json' });
+    return raw || { themes: [] };
+  } catch { return { themes: [] }; }
+}
+
+async function saveThemes(uid, env, themes) {
+  await env.KV.put('rn_themes:' + uid, JSON.stringify(themes));
+}
+
+// 根据 poolIdx 返回当前使用的名字数组
+// poolIdx < RENAME_POOLS.length 时为内置，否则为自定义
+async function getPoolNames(poolIdx, uid, env) {
+  if (poolIdx >= 0 && poolIdx < RENAME_POOLS.length) {
+    const pool = RENAME_POOLS[poolIdx];
+    if (pool.type === 2) return pool.primary || [];
+    return (pool.primary || []).concat(pool.fallback || []);
+  }
+  // 自定义主题
+  const t = await getThemes(uid, env);
+  const theme = t.themes[poolIdx - RENAME_POOLS.length];
+  if (!theme) return [];
+  if (theme.type === 2) return theme.primary || [];
+  return (theme.primary || []).concat(theme.fallback || []);
+}
+
+function applyRenameDedup(proxies, prefix, suffix) {
+  const result = [];
+  const nameCount = {};
+  for (const p of proxies) {
+    const base = p.name || '';
+    nameCount[base] = (nameCount[base] || 0) + 1;
+    const idx = nameCount[base];
+    const newName = idx === 1 ? base : base + '_' + idx;
+    result.push({ ...p, name: prefix + (newName || '') + suffix });
+  }
+  return result;
+}
+
+async function applyRenameCreative(proxies, poolIdx, prefix, suffix, uid, env, regionCache) {
+  if (!proxies || proxies.length === 0) return proxies;
+
+  // GeoIP 查询（唯一 host）
+  const hosts = [...new Set(proxies.map(p => p.server).filter(Boolean))];
+  const cache = regionCache || {};
+  const newCache = { ...cache };
+  const uncached = hosts.filter(h => !newCache[h]);
+  for (const host of uncached) {
+    try {
+      const r = await fetch('http://ip-api.com/json/' + encodeURIComponent(host) + '?fields=countryCode,city&lang=zh-CN', { timeout: 3000 });
+      const d = await r.json();
+      if (d && d.countryCode) {
+        newCache[host] = d.countryCode === 'CN' && d.city ? d.city : d.countryCode;
+      } else {
+        newCache[host] = 'XX';
+      }
+    } catch { newCache[host] = 'XX'; }
+  }
+
+  const groups = {};
+  for (const p of proxies) {
+    const label = newCache[p.server] || 'XX';
+    if (!groups[label]) groups[label] = [];
+    groups[label].push(p);
+  }
+
+  const pool = await getPoolNames(poolIdx, uid, env);
+  if (pool.length === 0) return proxies;
+
+  const result = [];
+  let globalIdx = 0;
+  for (const [label, group] of Object.entries(groups)) {
+    for (const p of group) {
+      const name = pool[globalIdx % pool.length];
+      const cycle = Math.floor(globalIdx / pool.length);
+      const finalName = cycle > 0 ? name + '_' + (cycle + 1) : name;
+      result.push({ ...p, name: prefix + (label !== 'XX' ? label + '｜' : '') + finalName + suffix });
+      globalIdx++;
+    }
+  }
+  return result;
+}
+
+function renameKb(mode, poolIdx, prefix, suffix, uid, env) {
+  const modeLabels = { off: '关闭', dedup: '去同名', creative: '创意' };
+  const status = modeLabels[mode] || '关闭';
+  let poolLabel = '-';
+  if (mode === 'creative') {
+    if (poolIdx >= 0 && poolIdx < RENAME_POOLS.length) {
+      poolLabel = RENAME_POOLS[poolIdx].label;
+    } else {
+      // 自定义主题
+      const idx = poolIdx - RENAME_POOLS.length;
+      // 同步读取，简化显示（实际值从 KV 取，这里用索引显示）
+      poolLabel = '自定义#' + (idx + 1);
+    }
+  }
+  const pfx = prefix || '(无)';
+  const sfx = suffix || '(无)';
+  return {
+    inline_keyboard: [
+      [
+        { text: mode === 'off' ? '✅ 关闭' : '⬜ 关闭', callback_data: 'rn_mode:off' },
+        { text: mode === 'dedup' ? '✅ 去同名' : '⬜ 去同名', callback_data: 'rn_mode:dedup' },
+        { text: mode === 'creative' ? '✅ 创意' : '⬜ 创意', callback_data: 'rn_mode:creative' },
+      ],
+      [
+        { text: '🎨 主题: ' + poolLabel, callback_data: 'rn_pool_menu' },
+        { text: '➕ 扩增主题', callback_data: 'rn_theme_type' },
+      ],
+      [
+        { text: '🔤 前缀: ' + pfx, callback_data: 'rn_prefix' },
+        { text: '🔤 后缀: ' + sfx, callback_data: 'rn_suffix' },
+      ],
+      [
+        { text: '📋 当前: ' + status, callback_data: 'noop' },
+      ],
+      [
+        { text: '\u2190 返回', callback_data: 'menu' },
+      ],
+    ],
+  };
 }
 
 // ==================== KV 累计状态（跨实例共享） ====================
@@ -454,7 +639,7 @@ async function saveToClip(text, ttl, env) {
 // 保存短链并记录到用户索引
 async function saveToClipAndTrack(text, ttl, env, uid, extra) {
   const id = await saveToClip(text, ttl, env);
-  const clipUrl = (env.CLIP_URL || '') + '/share/' + id;
+  const clipUrl = ((env.CLIP_URL || '').replace(/\/+$/, '')) + '/share/' + id;
   const entry = {
     id,
     ...extra,
@@ -522,6 +707,79 @@ async function onMsg(msg, env) {
     });
   }
 
+  // 重命名前缀/后缀输入模式
+  if (u.state === 'RN_PREFIX') {
+    const val = (msg.text || '').trim();
+    u._renamePrefix = val === '-' ? '' : val;
+    u.state = null;
+    saveRenameConfig(uid, env, { mode: u._renameMode || 'off', pool: u._renamePool || 0, prefix: u._renamePrefix, suffix: u._renameSuffix || '' }).catch(() => {});
+    return replyOrEdit(u, cid, env, {
+      text: '\u2705 \u524D\u7F00: ' + (u._renamePrefix || '\uFF08\u65E0\uFF09'),
+      parse_mode: 'HTML',
+      reply_markup: mainKb(),
+    });
+  }
+
+  if (u.state === 'RN_SUFFIX') {
+    const val = (msg.text || '').trim();
+    u._renameSuffix = val === '-' ? '' : val;
+    u.state = null;
+    saveRenameConfig(uid, env, { mode: u._renameMode || 'off', pool: u._renamePool || 0, prefix: u._renamePrefix || '', suffix: u._renameSuffix }).catch(() => {});
+    return replyOrEdit(u, cid, env, {
+      text: '\u2705 \u540E\u7F00: ' + (u._renameSuffix || '\uFF08\u65E0\uFF09'),
+      parse_mode: 'HTML',
+      reply_markup: mainKb(),
+    });
+  }
+
+  // 自定义主题输入
+  if (u.state && u.state.startsWith('RN_THEME_')) {
+    const fmt = u.state.split('_')[2];
+    const val = (msg.text || '').trim();
+    u.state = null;
+
+    const lines = val.split(/\n+/).map(l => l.trim()).filter(Boolean);
+    if (lines.length < 2) {
+      return replyOrEdit(u, cid, env, {
+        text: '\u274C \u8F93\u5165\u4E0D\u5B8C\u6574\uff0c\u81F3\u5C11\u9700\u8981\u4E3B\u9898\u540D + \u8F6E\u6362\u5217\u8868\u4E24\u884C',
+        parse_mode: 'HTML',
+        reply_markup: mainKb(),
+      });
+    }
+
+    const label = lines[0];
+    const primary = lines[1].split(/[,\uff0c]/).map(s => s.trim()).filter(Boolean);
+    let fallback = [];
+    if (lines[2]) fallback = lines[2].split(/[,\uff0c]/).map(s => s.trim()).filter(Boolean);
+
+    if (primary.length === 0) {
+      return replyOrEdit(u, cid, env, {
+        text: '\u274C \u8F6E\u6362\u5217\u8868\u4E3A\u7A7A\uff0c\u8BF7\u91CD\u53D1',
+        parse_mode: 'HTML',
+        reply_markup: mainKb(),
+      });
+    }
+
+    const themes = await getThemes(uid, env);
+    let type;
+    if (fmt === '1') type = 1;
+    else if (fmt === '2') type = 2;
+    else if (fmt === '3') type = 3;
+    else type = 1;
+
+    themes.themes.push({ label, type, primary, fallback });
+    await saveThemes(uid, env, themes);
+
+    const preview = primary.slice(0, 5).join('\u3001') + (primary.length > 5 ? '\u2026' : '') +
+      (fallback.length ? '\uff0b' + fallback.slice(0, 3).join('\u3001') : '');
+
+    return replyOrEdit(u, cid, env, {
+      text: '\u2705 \u4E3B\u9898\u5DF2\u6DFB\u52A0\uff1a' + label + '\n\n' + label + '\n' + primary.join('\uff0c') + (fallback.length ? '\n' + fallback.join('\uff0c') : ''),
+      parse_mode: 'HTML',
+      reply_markup: mainKb(),
+    });
+  }
+
   // 获取输入内容
   let content = '';
   let isRemote = false;
@@ -575,7 +833,7 @@ async function onMsg(msg, env) {
         const subResult = await fetchSub(urls[0], uid, env);
         subText = subResult.text;
         u._lastUrlCount = 1;
-        u._lastFetchUa = subResult.ua;
+        u._lastFetchUa = subResult.ua === 'proxy' ? '反代 (Karing)' : subResult.ua;
       } catch (e) {
         return replyOrEdit(u, cid, env, {
           text: '\u274C \u62C9\u53D6\u5931\u8D25: ' + e.message,
@@ -830,10 +1088,12 @@ async function onMsg(msg, env) {
   if (proxies && proxies.length > 0) {
     const before = proxies.length;
     proxies = deduplicateProxies(proxies);
+    const deduped = before - proxies.length;
     if (u._lastStats) {
-      u._lastStats.dupNodes = before - proxies.length;
+      u._lastStats.dupNodes = deduped;
       u._lastStats.actualNodes = proxies.length;
     }
+    u._lastDedupCount = deduped;
   }
   }
 
@@ -886,6 +1146,7 @@ async function onMsg(msg, env) {
   // 纯 Gost（无任何节点）
   if (hasGost && !hasStd && !hasWg) {
     u._lastSubInput = subText;
+    u._lastRawContent = subText;
     u._lastProxies = [];
     u._wgProxies = null;
     u._isGost = true;
@@ -894,12 +1155,18 @@ async function onMsg(msg, env) {
     return replyOrEdit(u, cid, env, {
       text: '\u{1F504} <b>\u68C0\u6D4B\u5230\u8BA2\u9605\u5185\u5BB9</b>\n\n\u{1F4CA} \u8282\u70B9\u6570: <b>' + u._gostCount + '</b>\n\u{1F4CD} Gost Tunnel: ' + u._gostCount + '\n\u26A0\uFE0F \u4EC5 Shadowrocket / URI \u5217\u8868\u652F\u6301 Gost Tunnel\n\n\u8BF7\u9009\u62E9\u8F93\u51FA\u683C\u5F0F:',
       parse_mode: 'HTML',
-      reply_markup: fmtKb(FORMAT_OPTIONS.filter(f => GOST_FORMATS.includes(f.id)), u._convTtl, u.ttl),
+      reply_markup: fmtKb(FORMAT_OPTIONS.filter(f => GOST_FORMATS.includes(f.id)), u._convTtl, u.ttl, u),
     });
   }
 
   // 没有任何节点
   if (!hasStd && !hasWg && !hasGost) {
+    // 防御：subText 为空或太短（fetch 失败）时不存空短链
+    if (!subText || subText.trim().length < 10) {
+      return replyOrEdit(u, cid, env, {
+        text: '\u274C \u8BA2\u9605\u62C9\u53D6\u5931\u8D25\u6216\u5185\u5BB9\u4E3A\u7A7A\u3002\n\n\u76F4\u8FDE\u4E0E\u53CD\u4EE3\u5747\u5931\u8D25\uFF0C\u8BE5\u8BA2\u9605\u53EF\u80FD\u5F00\u542F\u4E86\u4E25\u683C\u9632\u6293\u3002\n\n\u8BF7\u5C06\u8BA2\u9605\u5185\u5BB9\uff08base64 \u6216 URI \u5217\u8868\uff09\u76F4\u63A5\u53D1\u7ED9\u672C\u7FFB\u8BD1\u673A\u5668\u4EBA\uFF0C\u5373\u53EF\u6B63\u5E38\u8F6C\u6362\u3002',
+      });
+    }
     try {
       const preview = subText.length > 50 ? subText.slice(0, 50) + '...' : subText;
       const { id, url: clipUrl } = await saveToClipAndTrack(subText, ttl, env, uid, {
@@ -908,6 +1175,7 @@ async function onMsg(msg, env) {
       const previewShow = subText.length > 150 ? subText.slice(0, 150) + '...' : subText;
       const ttlT = ttl === 0 ? '\u6C38\u4E0D\u8FC7\u671F' : ttl < 3600 ? Math.round(ttl / 60) + '\u5206\u949F' : Math.round(ttl / 3600) + '\u5C0F\u65F6';
       u._lastContent = subText;
+      u._lastRawContent = subText;
       u._lastSubInput = subText;
       return replyOrEdit(u, cid, env, {
         text: '\u2705 <b>\u5DF2\u4FDD\u5B58</b>\n\n\u{1F517} <code>' + clipUrl + '</code>\n\n\u{1F4CB} \u9884\u89C8:\n<code>' + escapeHTML(previewShow) + '</code>\n\n\u23F1 ' + ttlT,
@@ -949,10 +1217,17 @@ async function onMsg(msg, env) {
       (u._lastStats.dupNodes > 0 ? ', \u91CD\u590D\u8282\u70B9: ' + u._lastStats.dupNodes : '') + ')'
     : '';
 
+  // 从 KV 加载重命名配置
+  const rc = await getRenameConfig(uid, env);
+  u._renameMode = rc.mode || 'off';
+  u._renamePool = rc.pool || 0;
+  u._renamePrefix = rc.prefix || '';
+  u._renameSuffix = rc.suffix || '';
+
   // 格式选择消息
   const fmtText =
     '\u{1F504} <b>\u68C0\u6D4B\u5230\u8BA2\u9605\u5185\u5BB9</b>\n\n' +
-    (statsLine ? '' : '\u{1F4CA} \u8282\u70B9\u6570: <b>' + mergedStd.length + '</b>\n') +
+    (statsLine ? '' : '\u{1F4CA} \u8282\u70B9\u6570: <b>' + mergedStd.length + '</b>' + (u._lastDedupCount > 0 ? '\u3001\u53BB\u91CD: ' + u._lastDedupCount : '') + '\n') +
     statsLine + '\n' +
     '\u{1F4CD} ' + typeStr + '\n' +
     sourceInfo + uaInfo + '\n' +
@@ -963,12 +1238,12 @@ async function onMsg(msg, env) {
     await tg('editMessageText', env.BOT_TOKEN, {
       chat_id: u._fmtMsg.cid, message_id: u._fmtMsg.id,
       text: fmtText, parse_mode: 'HTML',
-      reply_markup: fmtKb(null, u._convTtl, u.ttl),
+      reply_markup: fmtKb(null, u._convTtl, u.ttl, u),
     });
   } else {
     const sent = await replyOrEdit(u, cid, env, {
       text: fmtText, parse_mode: 'HTML',
-      reply_markup: fmtKb(null, u._convTtl, u.ttl),
+      reply_markup: fmtKb(null, u._convTtl, u.ttl, u),
     });
     if (!isRemote) {
       const msgId = sent?.result?.message_id || (sent?.from_edit ? u.promptMid : null);
@@ -1072,6 +1347,213 @@ async function onCb(q, env) {
     });
   }
 
+  // ====== 重命名设置 ======
+
+  if (d === 'rn_menu') {
+    const rc = await getRenameConfig(uid, env);
+    u._renameMode = rc.mode || 'off';
+    u._renamePool = rc.pool || 0;
+    u._renamePrefix = rc.prefix || '';
+    u._renameSuffix = rc.suffix || '';
+    return tg('editMessageText', env.BOT_TOKEN, {
+      chat_id: cid,
+      message_id: mid,
+      text: '\u{1F3A8} <b>\u91CD\u547D\u540D\u8BBE\u7F6E</b>\n\n\u9009\u62E9\u91CD\u547D\u540D\u6A21\u5F0F\uFF0C\u4F1A\u5F71\u54CD\u540E\u7EED\u6240\u6709\u8F6C\u6362\u3002',
+      parse_mode: 'HTML',
+      reply_markup: renameKb(rc.mode || 'off', rc.pool || 0, rc.prefix || '', rc.suffix || '', uid, env),
+    });
+  }
+
+  if (d === 'conv_rn_menu') {
+    const rc = await getRenameConfig(uid, env);
+    u._renameMode = rc.mode || 'off';
+    u._renamePool = rc.pool || 0;
+    u._renamePrefix = rc.prefix || '';
+    u._renameSuffix = rc.suffix || '';
+    return tg('editMessageText', env.BOT_TOKEN, {
+      chat_id: cid, message_id: mid,
+      text: '\u{1F3A8} <b>\u8F6C\u6362\u91CD\u547D\u540D</b>\n\n\u5F53\u524D\u914D\u7F6E\u4F1A\u5E94\u7528\u4E8E\u672C\u6B21\u8F6C\u6362\u3002',
+      parse_mode: 'HTML',
+      reply_markup: renameKb(rc.mode || 'off', rc.pool || 0, rc.prefix || '', rc.suffix || '', uid, env),
+    });
+  }
+
+  if (d === 'conv_rn_menu') {
+    const mode = u._renameMode || 'off';
+    const poolIdx = u._renamePool || 0;
+    const pfx = u._renamePrefix || '';
+    const sfx = u._renameSuffix || '';
+    return tg('editMessageText', env.BOT_TOKEN, {
+      chat_id: cid,
+      message_id: mid,
+      text: '\u{1F3A8} <b>\u8F6C\u6362\u91CD\u547D\u540D</b>\n\n\u5F53\u524D\u914D\u7F6E\u4F1A\u5E94\u7528\u4E8E\u672C\u6B21\u8F6C\u6362\u3002',
+      parse_mode: 'HTML',
+      reply_markup: renameKb(mode, poolIdx, pfx, sfx, uid, env),
+    });
+  }
+
+  if (d.startsWith('rn_mode:')) {
+    u._renameMode = d.split(':')[1];
+    saveRenameConfig(uid, env, { mode: u._renameMode, pool: u._renamePool || 0, prefix: u._renamePrefix || '', suffix: u._renameSuffix || '' }).catch(() => {});
+    const mode = u._renameMode;
+    const poolIdx = u._renamePool || 0;
+    const pfx = u._renamePrefix || '';
+    const sfx = u._renameSuffix || '';
+    return tg('editMessageText', env.BOT_TOKEN, {
+      chat_id: cid, message_id: mid,
+      text: '\u2705 \u5DF2\u8BBE\u7F6E: ' + (mode === 'off' ? '\u5173\u95ED' : mode === 'dedup' ? '\u53BB\u540C\u540D' : '\u521B\u610F\u547D\u540D'),
+      parse_mode: 'HTML',
+      reply_markup: renameKb(mode, poolIdx, pfx, sfx, uid, env),
+    });
+  }
+
+  if (d === 'rn_pool_menu') {
+    const rows = [];
+    let row = [];
+    for (let i = 0; i < RENAME_POOLS.length; i++) {
+      const selected = (u._renamePool || 0) === i ? '\u2705 ' : '';
+      row.push({ text: selected + RENAME_POOLS[i].label, callback_data: 'rn_pool:' + i });
+      if (row.length === 2) { rows.push(row); row = []; }
+    }
+    if (row.length) rows.push(row);
+
+    const themes = await getThemes(uid, env);
+    for (let i = 0; i < themes.themes.length; i++) {
+      const idx = RENAME_POOLS.length + i;
+      const selected = (u._renamePool || 0) === idx ? '\u2705 ' : '';
+      row.push({ text: selected + themes.themes[i].label + ' \u{1F5D1}', callback_data: 'rn_pool:' + idx });
+      if (row.length === 2) { rows.push(row); row = []; }
+    }
+    if (row.length) rows.push(row);
+
+    rows.push([{ text: '\u{1F5D1} 管理主题', callback_data: 'rn_themes' }]);
+    rows.push([{ text: '\u{2190} \u8FD4\u56DE', callback_data: 'rn_menu' }]);
+    return tg('editMessageText', env.BOT_TOKEN, {
+      chat_id: cid, message_id: mid,
+      text: '\u{1F4E6} <b>\u9009\u62E9\u547D\u540D\u4E3B\u9898</b>\n\n\u70B9\u51FB\u4E3B\u9898\u9009\u62E9\uff0c\u81EA\u5B9A\u4E49\u4E3B\u9898\u53EF\u5220\u9664\u3002',
+      parse_mode: 'HTML',
+      reply_markup: { inline_keyboard: rows },
+    });
+  }
+
+  if (d.startsWith('rn_pool:')) {
+    u._renamePool = parseInt(d.split(':')[1]);
+    saveRenameConfig(uid, env, { mode: u._renameMode || 'off', pool: u._renamePool, prefix: u._renamePrefix || '', suffix: u._renameSuffix || '' }).catch(() => {});
+    const mode = u._renameMode || 'off';
+    const poolIdx = u._renamePool || 0;
+    const pfx = u._renamePrefix || '';
+    const sfx = u._renameSuffix || '';
+    let label = '未知';
+    if (poolIdx >= 0 && poolIdx < RENAME_POOLS.length) label = RENAME_POOLS[poolIdx].label;
+    else { const t = await getThemes(uid, env); const th = t.themes[poolIdx - RENAME_POOLS.length]; if (th) label = th.label; }
+    return tg('editMessageText', env.BOT_TOKEN, {
+      chat_id: cid, message_id: mid,
+      text: '\u2705 \u5DF2\u9009\u62E9: ' + label,
+      parse_mode: 'HTML',
+      reply_markup: renameKb(mode, poolIdx, pfx, sfx, uid, env),
+    });
+  }
+
+  // ====== 主题管理页 ======
+  if (d === 'rn_themes') {
+    const themes = await getThemes(uid, env);
+    const rows = [];
+    if (themes.themes.length === 0) {
+      rows.push([{ text: '\u{1F4ED} \u6682\u65E0\u81EA\u5B9A\u4E49\u4E3B\u9898', callback_data: 'noop' }]);
+    } else {
+      let row = [];
+      for (let i = 0; i < themes.themes.length; i++) {
+        row.push({ text: '\u{1F5D1} ' + themes.themes[i].label, callback_data: 'rn_theme_del:' + i });
+        if (row.length === 2) { rows.push(row); row = []; }
+      }
+      if (row.length) rows.push(row);
+    }
+    rows.push([{ text: '\u{2190} \u8FD4\u56DE', callback_data: 'rn_pool_menu' }]);
+    return tg('editMessageText', env.BOT_TOKEN, {
+      chat_id: cid, message_id: mid,
+      text: '\u{1F5D1} <b>\u4E3B\u9898\u7BA1\u7406</b>\n\n\u70B9\u51FB\u5220\u9664\u81EA\u5B9A\u4E49\u4E3B\u9898\u3002',
+      parse_mode: 'HTML',
+      reply_markup: { inline_keyboard: rows },
+    });
+  }
+
+  if (d.startsWith('rn_theme_del:')) {
+    const idx = parseInt(d.split(':')[1]);
+    const themes = await getThemes(uid, env);
+    if (idx >= 0 && idx < themes.themes.length) {
+      themes.themes.splice(idx, 1);
+      await saveThemes(uid, env, themes);
+    }
+    return tg('editMessageText', env.BOT_TOKEN, {
+      chat_id: cid, message_id: mid,
+      text: '\u2705 \u5DF2\u5220\u9664',
+      parse_mode: 'HTML',
+      reply_markup: { inline_keyboard: [[{ text: '\u{2190} \u8FD4\u56DE', callback_data: 'rn_themes' }]] },
+    });
+  }
+
+  // ====== 扩增主题：选择格式 ======
+  if (d === 'rn_theme_type') {
+    return tg('editMessageText', env.BOT_TOKEN, {
+      chat_id: cid, message_id: mid,
+      text: '\u{1F3A8} <b>\u6269\u589E\u4E3B\u9898\u6A21\u5F0F</b>\n\n\u8BF7\u9009\u62E9\u4E3B\u9898\u683C\u5F0F\uff1a\n\n\u2460 \u4E3B\u8F6E\u6362+\u5151\u5E95\uff08\u5982\uFF1A\u751F\u8096+\u516B\u5366\uff09\n\u2461 \u5355\u6570\u7EC4\uff08\u5982\uFF1A\u8282\u6C14\u3001\u5403\u8D27\u5217\u8868\uff09\n\u2462 \u968F\u673A\uff08\u6309\u5730\u533A\u667A\u80FD\u5206\u914D\uff09',
+      parse_mode: 'HTML',
+      reply_markup: { inline_keyboard: [
+        [{ text: '\u2460 \u4E3B+\u5151\u5E95', callback_data: 'rn_theme_fmt:1' }],
+        [{ text: '\u2461 \u5355\u6570\u7EC4', callback_data: 'rn_theme_fmt:2' }],
+        [{ text: '\u2462 \u968F\u673A\u540D\u79F0', callback_data: 'rn_theme_fmt:3' }],
+        [{ text: '\u{2190} \u8FD4\u56DE', callback_data: 'rn_menu' }],
+      ] },
+    });
+  }
+
+  if (d.startsWith('rn_theme_fmt:')) {
+    const fmt = d.split(':')[1];
+    u.state = 'RN_THEME_' + fmt;
+    u.promptCid = cid;
+    u.promptMid = mid;
+    const templates = {
+      '1': '\u8BF7\u53D1\u9001\u4E09\u884C\uff08\u4E00\u884C\u4E00\u4E2A\u53C2\u6570\uff09\uff1a\n\n\u4E3B\u9898\u540D\n\u8F6E\u6362\u8BCD1\uff0c\u8F6E\u6362\u8BCD2\uff0c\u8F6E\u6362\u8BCD3\n\u5151\u5E95\u8BCD1\uff0c\u5151\u5E95\u8BCD2',
+      '2': '\u8BF7\u53D1\u9001\u4E24\u884C\uff08\u4E00\u884C\u4E00\u4E2A\u53C2\u6570\uff09\uff1a\n\n\u4E3B\u9898\u540D\n\u8F6E\u6362\u8BCD1\uff0c\u8F6E\u6362\u8BCD2\uff0c\u8F6E\u6362\u8BCD3',
+      '3': '\u8BF7\u53D1\u9001\u4E24\u884C\uff1a\n\n\u4E3B\u9898\u540D\n\u968F\u673A\u8BCD1\uff0c\u968F\u673A\u8BCD2\uff0c\u968F\u673A\u8BCD3',
+    };
+    return tg('editMessageText', env.BOT_TOKEN, {
+      chat_id: cid, message_id: mid,
+      text: templates[fmt] || '\u{1F4A4}',
+      parse_mode: 'HTML',
+      reply_markup: { inline_keyboard: [[{ text: '\u{2190} \u53D6\u6D88', callback_data: 'rn_menu' }]] },
+    });
+  }
+
+  if (d === 'rn_prefix') {
+    u.state = 'RN_PREFIX';
+    u.promptCid = cid;
+    u.promptMid = mid;
+    return tg('editMessageText', env.BOT_TOKEN, {
+      chat_id: cid, message_id: mid,
+      text: '\u{1F524} \u8BF7\u53D1\u9001\u524D\u7F00\uFF08\u53D1\u9001 \u201C-\u201D \u6E05\u7A7A\uFF09',
+      parse_mode: 'HTML',
+      reply_markup: { inline_keyboard: [[{ text: '\u2190 \u53D6\u6D88', callback_data: 'rn_menu' }]] },
+    });
+  }
+
+  if (d === 'rn_suffix') {
+    u.state = 'RN_SUFFIX';
+    u.promptCid = cid;
+    u.promptMid = mid;
+    return tg('editMessageText', env.BOT_TOKEN, {
+      chat_id: cid, message_id: mid,
+      text: '\u{1F524} \u8BF7\u53D1\u9001\u540E\u7F00\uFF08\u53D1\u9001 \u201C-\u201D \u6E05\u7A7A\uFF09',
+      parse_mode: 'HTML',
+      reply_markup: { inline_keyboard: [[{ text: '\u2190 \u53D6\u6D88', callback_data: 'rn_menu' }]] },
+    });
+  }
+
+  // ====== 格式选择页面处理前缀/后缀输入 ======
+  if (d.startsWith('conv_rn_prefix_') || d.startsWith('conv_rn_suffix_')) {
+    // 格式选择页面待实现
+  }
+
   if (d === 'ttl_menu') {
     return tg('editMessageText', env.BOT_TOKEN, {
       chat_id: cid,
@@ -1087,7 +1569,7 @@ async function onCb(q, env) {
     return tg('editMessageText', env.BOT_TOKEN, {
       chat_id: cid,
       message_id: mid,
-      text: '\u2705 \u5DF2\u8BBE\u7F6E: ' + (u.ttl === 0 ? '\u6C38\u4E0D\u8FC7\u671F' : u.ttl < 3600 ? Math.round(u.ttl / 60) + '\u5206\u949F' : Math.round(u.ttl / 3600) + '\u5C0F\u65F6'),
+      text: '\u2705 \u5DF2\u8BBE\u7F6E: ' + (u.ttl === 0 ? '\u6C38\u4E0D\u8FC7\u671F' : u.ttl < 3600 ? Math.round(u.ttl / 60) + '\u5206\u949F' : Math.round(u.ttl / 3600) + '\u5C0F\u65F6') + '\n\n<code>[DEBUG] ' + d + '</code>',
       parse_mode: 'HTML',
       reply_markup: mainKb(),
     });
@@ -1145,7 +1627,7 @@ async function onCb(q, env) {
         reply_markup: mainKb(),
       });
     }
-    const clipUrl = (env.CLIP_URL || '') + '/share/' + l.id;
+    const clipUrl = ((env.CLIP_URL || '').replace(/\/+$/, '')) + '/share/' + l.id;
     const statusIcon = linkStatusIcon(l);
     let statusText;
     if (l.ttl === 0) statusText = '\u{1F535} \u6C38\u4E45\u6709\u6548';
@@ -1241,9 +1723,9 @@ async function onCb(q, env) {
     return tg('editMessageText', env.BOT_TOKEN, {
       chat_id: cid,
       message_id: mid,
-      text: '\u23F1 <b>\u4FEE\u6539\u77ED\u94FE\u6642\u6548</b>\n\n\u9009\u62E9\u65B0\u7684\u6642\u6548\uFF0C\u5DF2\u8FC7\u671F\u7684\u77ED\u94FE\u65E0\u6CD5\u6062\u590D\u3002',
+      text: '\u23F1 <b>\u4FEE\u6539\u77ED\u94FE\u6642\u6548</b>\n\n\u9009\u62E9\u65B0\u7684\u6642\u6548\uFF0C\u5DF2\u8FC7\u671F\u7684\u77ED\u94FE\u65E0\u6CD5\u6062\u590D\u3002\n\n<code>[DEBUG] ' + d + '</code>',
       parse_mode: 'HTML',
-      reply_markup: ttlKb('chg_ttl_' + linkId + ':'),
+      reply_markup: ttlKb(0, 'chg_ttl_' + linkId + ':'),
     });
   }
 
@@ -1252,6 +1734,7 @@ async function onCb(q, env) {
     const colonIdx = rest.lastIndexOf(':');
     const linkId = rest.slice(0, colonIdx);
     const newTtl = parseInt(rest.slice(colonIdx + 1));
+    await tg('answerCallbackQuery', env.BOT_TOKEN, { callback_query_id: q.id, text: '🔬 短链TTL回掉: ' + d });
     try {
       const data = await env.KV.get('share_' + linkId, 'json');
       if (data && data.text) {
@@ -1261,7 +1744,7 @@ async function onCb(q, env) {
         return tg('editMessageText', env.BOT_TOKEN, {
           chat_id: cid,
           message_id: mid,
-          text: '\u274C \u77ED\u94FE\u5DF2\u8FC7\u671F\uFF0C\u65E0\u6CD5\u4FEE\u6539\n\n\u5DF2\u8FC7\u671F\u7684\u77ED\u94FE\u65E0\u6CD5\u6062\u590D\uFF0C\u8BF7\u8FD4\u56DE\u5217\u8868\u5220\u9664\u3002',
+          text: '\u274C \u77ED\u94FE\u5DF2\u8FC7\u671F\uFF0C\u65E0\u6CD5\u4FEE\u6539\n\n\u5DF2\u8FC7\u671F\u7684\u77ED\u94FE\u65E0\u6CD5\u6062\u590D\uFF0C\u8BF7\u8FD4\u56DE\u5217\u8868\u5220\u9664\u3002\n\n<code>[DEBUG] ' + d + '</code>',
           parse_mode: 'HTML',
           reply_markup: { inline_keyboard: [[{ text: '\u2190 \u8FD4\u56DE\u5217\u8868', callback_data: 'my_links_0' }]] },
         });
@@ -1272,11 +1755,11 @@ async function onCb(q, env) {
     if (idx >= 0) {
       links[idx].ttl = newTtl;
       links[idx].expiresAt = newTtl > 0 ? Date.now() + newTtl * 1000 : null;
-      await env.KV.put('user_links:' + uid, JSON.stringify(links));
+      await env.KV.put('ulinks:' + uid, JSON.stringify(links));
     }
     const l = links.find(x => x.id === linkId);
     if (l) {
-      const clipUrl = (env.CLIP_URL || '') + '/share/' + l.id;
+      const clipUrl = ((env.CLIP_URL || '').replace(/\/+$/, '')) + '/share/' + l.id;
       const statusText = l.ttl === 0 ? '\u{1F535} \u6C38\u4E45\u6709\u6548'
         : l.expiresAt && Date.now() > l.expiresAt ? '\u26AB \u5DF2\u8FC7\u671F'
         : '\u{1F7E0} \u5269 ' + Math.round((l.expiresAt - Date.now()) / 60000) + '\u5206\u949F';
@@ -1284,6 +1767,7 @@ async function onCb(q, env) {
       text += linkStatusIcon(l) + ' <b>' + escapeHTML(l.preview) + '</b>\n';
       text += '\u{1F4CA} ' + (l.nodeCount || 0) + ' \u8282\u70B9  \u00B7 ' + statusText + '\n\n';
       text += '\u{1F517} <code>' + escapeHTML(clipUrl) + '</code>';
+      text += '\n\n<code>[DEBUG] ' + d + '</code>';
       return tg('editMessageText', env.BOT_TOKEN, {
         chat_id: cid,
         message_id: mid,
@@ -1317,7 +1801,7 @@ async function onCb(q, env) {
       message_id: mid,
       text: '\u23F1 <b>\u8BBE\u7F6E\u5F53\u524D\u8F6C\u6362\u7684\u6642\u6548</b>\n\n\u4EC5\u5F71\u54CD\u672C\u6B21\u8F6C\u6362\uFF0C\u4E0D\u4F1A\u6539\u53D8\u4E3B\u9875\u7684\u9ED8\u8BA4\u6642\u6548\u3002',
       parse_mode: 'HTML',
-      reply_markup: ttlKb('conv_'),
+      reply_markup: ttlKb(u.ttl || 0, 'conv_ttl_set:'),
     });
   }
 
@@ -1331,7 +1815,7 @@ async function onCb(q, env) {
       message_id: mid,
       text: '\u2705 \u5DF2\u8BBE\u7F6E\u5F53\u524D\u6642\u6548: ' + (ttlVal === 0 ? '\u6C38\u4E0D\u8FC7\u671F' : ttlVal < 3600 ? Math.round(ttlVal / 60) + '\u5206\u949F' : Math.round(ttlVal / 3600) + '\u5C0F\u65F6'),
       parse_mode: 'HTML',
-      reply_markup: fmtKb(formats, u._convTtl, u.ttl),
+      reply_markup: fmtKb(formats, u._convTtl, u.ttl, u),
     });
   }
 
@@ -1349,7 +1833,7 @@ async function onCb(q, env) {
           message_id: mid,
           text: '\u274C Gost Tunnel \u4E0D\u652F\u6301\u8BE5\u683C\u5F0F',
           parse_mode: 'HTML',
-          reply_markup: fmtKb(FORMAT_OPTIONS.filter(f => GOST_FORMATS.includes(f.id)), u._convTtl, u.ttl),
+          reply_markup: fmtKb(FORMAT_OPTIONS.filter(f => GOST_FORMATS.includes(f.id)), u._convTtl, u.ttl, u),
         });
       }
       const rawText = u._gostInput || u._lastSubInput || '';
@@ -1397,22 +1881,60 @@ async function onCb(q, env) {
     }
 
     // 非 gost 格式的标准节点转换
+    // 从 KV 加载重命名配置
+    const rc2 = await getRenameConfig(uid, env);
+    u._renameMode = rc2.mode || 'off';
+    u._renamePool = rc2.pool || 0;
+    u._renamePrefix = rc2.prefix || '';
+    u._renameSuffix = rc2.suffix || '';
+    let proxiesForConvert = u._lastProxies;
+    const rnMode = u._renameMode || 'off';
+    if (rnMode !== 'off') {
+      const pfx = u._renamePrefix || '';
+      const sfx = u._renameSuffix || '';
+      if (rnMode === 'dedup') {
+        proxiesForConvert = applyRenameDedup(u._lastProxies, pfx, sfx);
+      } else if (rnMode === 'creative') {
+        proxiesForConvert = await applyRenameCreative(u._lastProxies, u._renamePool || 0, pfx, sfx, uid, env, u._regionCache || {});
+      }
+    }
     let output;
-    try {
-      output = ProxyUtils.produce(u._lastProxies, fmt);
-    } catch (e) {
-      return tg('editMessageText', env.BOT_TOKEN, {
-        chat_id: cid, message_id: mid,
-        text: '\u274C \u8F6C\u6362\u5931\u8D25: ' + e.message,
-        parse_mode: 'HTML', reply_markup: fmtKb(null, u._convTtl, u.ttl),
-      });
+    if (fmt === 'b64') {
+      // Base64 输出：取原始订阅内容（已是 base64 base64 或可截取
+      // 优先用原始文本（直连或反代拿到的最初内容）
+      let rawText = u._lastRawContent || '';
+      // 如果原始内容不是 base64（是 URI 列表），先转 base64
+      if (rawText && !/^[A-Za-z0-9+/=\s\r\n]+$/.test(rawText.trim())) {
+        rawText = btoa(unescape(encodeURIComponent(rawText)));
+      }
+      if (!rawText) {
+        // 兜底：从 parsed proxies 拼接
+        let std = '';
+        try { std = ProxyUtils.produce(proxiesForConvert, 'uri'); } catch {}
+        const wgList = u._accWgProxies || u._wgProxies || [];
+        let wgOut = '';
+        if (wgList.length > 0) { try { wgOut = ProxyUtils.produce(wgList, 'clashmeta'); } catch {} }
+        const gostRaw = u._accGostInput || u._gostInput || '';
+        rawText = btoa(unescape(encodeURIComponent([std, wgOut, gostRaw].filter(Boolean).join('\n'))));
+      }
+      output = rawText;
+    } else {
+      try {
+        output = ProxyUtils.produce(proxiesForConvert, fmt);
+      } catch (e) {
+        return tg('editMessageText', env.BOT_TOKEN, {
+          chat_id: cid, message_id: mid,
+          text: '\u274C \u8F6C\u6362\u5931\u8D25: ' + e.message,
+          parse_mode: 'HTML', reply_markup: fmtKb(null, u._convTtl, u.ttl, u),
+        });
+      }
     }
 
     if (!output) {
       return tg('editMessageText', env.BOT_TOKEN, {
         chat_id: cid, message_id: mid,
         text: '\u274C \u8F6C\u6362\u7ED3\u679C\u4E3A\u7A7A',
-        parse_mode: 'HTML', reply_markup: fmtKb(null, u._convTtl, u.ttl),
+        parse_mode: 'HTML', reply_markup: fmtKb(null, u._convTtl, u.ttl, u),
       });
     }
 
@@ -1484,12 +2006,24 @@ export default {
 
     if (request.method === 'OPTIONS') return new Response('', { headers: cors });
 
+    // 调试路由（需设置 DEBUG_TOKEN 环境变量）
+    if (path === '/debug-fetch') {
+      if (!env.DEBUG_TOKEN || url.searchParams.get('token') !== env.DEBUG_TOKEN) return new Response('', { status: 403 });
+      const target = url.searchParams.get('url');
+      if (!target) return new Response('missing url', { status: 400 });
+      const r = await fetch(target, { headers: { 'User-Agent': 'Karing' } });
+      const text = await r.text();
+      let count = 0;
+      try { const parsed = ProxyUtils.parse(text); count = parsed?.length || 0; } catch {}
+      return new Response(JSON.stringify({ status: r.status, len: text.length, count }), { headers: { 'Content-Type': 'application/json', ...cors } });
+    }
+
     // API: 文本保存 (jtb-clip 兼容)
     if (path === '/save' && request.method === 'POST') {
       try {
         const body = await request.text();
         const id = await saveToClip(body, 86400, env);
-        const clipUrl = (env.CLIP_URL || '') + '/share/' + id;
+        const clipUrl = ((env.CLIP_URL || '').replace(/\/+$/, '')) + '/share/' + id;
         return new Response(JSON.stringify({ success: true, id, url: clipUrl }), { headers: { 'Content-Type': 'application/json', ...cors } });
       } catch (e) {
         return new Response(JSON.stringify({ error: e.message }), { status: 500, headers: { 'Content-Type': 'application/json', ...cors } });

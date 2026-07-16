@@ -11,7 +11,8 @@ binding = "KV"
 ALLOWED_USERS = "允许的用户 ID（逗号分隔），不设则全部开放"
 BOT_TOKEN = "Telegram Bot Token"
 WEBHOOK_SECRET = "域名防呆，随便设置个密码，变量可改"
-# CLIP_URL = "部署完再设置成可路由到worker的域名，一般是描述页那个"
+# PROXY_URL = "反代基础 URL，绕过 CF-to-CF 拉取拦截（可选）"
+# DEBUG_TOKEN = "debug-fetch 接口鉴权 Token（可选）"
 
 # 短链域名 — 部署后在 变量与密钥 设置
 # 类型: plain_text
