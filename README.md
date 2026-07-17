@@ -61,7 +61,7 @@ Telegram Bot — 订阅转换 + 短链分享，内置完整 Sub-Store 引擎（8
 4. 点 **More** → **Settings** → **Secrets and variables** → **Actions** → **New repository secret** 添加两个变量：
    - Name： `CF_ACCOUNT_ID`
    - Secret： 你的CFID，如登录cf后打开主页地址栏https://dash.cloudflare.com/你的CFID就是这串/home
-   再创建一个
+再创建一个
    - Name： `CF_API_TOKEN`
    - Secret： 你的CF操作令牌。CF首页点左上角三杠最下面 **管理账户** → **账户API令牌** 创建一个
 5. 去 **Actions** 页面 → 轻点 **Allworkers** → 点 **Fork Sync** → 猛击 **Run workflow** → 小圆点变绿自动部署激活
