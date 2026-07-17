@@ -1,28 +1,41 @@
-# 订阅反代搭建
+# 反代搭建教程
 
-当你的订阅链接托管在 Cloudflare（或使用 Cloudflare 代理的域名）时，Sub-Store Bot 的 Worker 出站请求会被 CF 的防护机制拦截（返回 403 "Just a moment"）。解决方案：用第三方平台（Vercel）做个无状态反代。
+## 为什么要搞这个？
 
-## 原理
+你的订阅链接可能托管在 Cloudflare 上。问题来了：Bot 本身也跑在 Cloudflare Workers 上，**Cloudflare 调用 Cloudflare** 会被当成机器人拦截，返回 403。
+
+解决办法：在 Vercel 上搭一个没有防护的中间人，Bot 先找 Vercel 要数据，Vercel 再去取你的订阅，绕开 CF 的拦截。
 
 ```
-订阅源（CF 防护） ← Vercel 反代（纯 Node.js，直透内容） ← Sub-Store Bot Worker
+你的订阅（CF 防护） ← Vercel（无防护） ← Bot Worker（CF）
 ```
 
-Vercel 的出口 IP 不会被 CF 当作机器人拦截，所以能正常拉取。
+## 你需要什么
 
-## 步骤
+- 一个 GitHub 账号
+- 一个 Vercel 账号（用 GitHub 登录就行）
+- 你的 Bot Worker 能访问的环境变量配置
 
-### 1. 创建 GitHub 仓库
+---
 
-```bash
-# 在 GitHub 上建一个新仓库，比如 sub-fetch-proxy
-git clone https://github.com/你的用户名/sub-fetch-proxy.git
-cd sub-fetch-proxy
-```
+## 一步一步来
 
-### 2. 编写反代代码
+### 第一步：GitHub 上建个新仓库
 
-创建 `api/index.js`：
+1. 打开 https://github.com/new
+2. 仓库名填 `sub-fetch-proxy`（或者你喜欢的名字）
+3. 公开/私有都行，点 **Create repository**
+4. 创建后你会看到一个快速设置页面，先放着
+
+### 第二步：写反代代码
+
+在你的电脑上（或者 GitHub 网页也行）：
+
+**方法 A：直接在 GitHub 网页上操作（最简单）**
+
+1. 在你刚建好的仓库页面，点 **Add file → Create new file**
+2. 文件路径填 `api/index.js`
+3. 内容粘贴下面这段：
 
 ```javascript
 export default async function handler(req, res) {
@@ -45,21 +58,20 @@ export default async function handler(req, res) {
 }
 ```
 
-### 3. 创建 Vercel 配置
+4. 拉到页面底部，点 **Commit new file**
 
-`vercel.json`：
+**方法 B：用命令行**
 
-```json
-{
-  "functions": {
-    "api/index.js": {
-      "maxDuration": 30
-    }
-  }
-}
+```bash
+# 克隆你的仓库
+git clone https://github.com/你的用户名/sub-fetch-proxy.git
+cd sub-fetch-proxy
+
+# 创建目录和文件
+mkdir api
 ```
 
-### 4. 推送到 GitHub
+把上面的代码保存为 `api/index.js`，然后：
 
 ```bash
 git add .
@@ -67,47 +79,55 @@ git commit -m "init"
 git push
 ```
 
-### 5. 导入 Vercel
+### 第三步：部署到 Vercel
 
-1. 打开 [Vercel Dashboard](https://vercel.com)
-2. **Add New → Project**
-3. 选择 `sub-fetch-proxy` 仓库
-4. 保持默认设置（Framework = Other），点击 **Deploy**
-5. 部署完成会得到一个域名如 `你的项目名.vercel.app`
+1. 打开 https://vercel.com 并用 GitHub 登录
+2. 点 **Add New → Project**
+3. 在列表里找到你刚建的 `sub-fetch-proxy`，点 **Import**
+4. Framework Preset 选 **Other**（默认就行），直接点 **Deploy**
+5. 等十几秒，部署完成会显示 🎉 **Completed**
+6. 你得到一个域名，类似 `sub-fetch-proxy.vercel.app`
 
-> ⚠️ **不要绑定自定义域名到 Cloudflare**：如果你的自定义域名走 CF 代理，CF Worker 调用 `${你的域名}` 仍然是 CF-to-CF 请求，依然会被拦截。请直接使用 Vercel 提供的 `*.vercel.app` 域名。
+> ⚠️ **重要**：不要给这个域名套 Cloudflare CDN。如果你有自定义域名想绑，确保 DNS 解析不走 CF 代理（橙色云朵关掉），否则又回到 CF-to-CF 的老问题。
 
-### 6. 配置 Bot 环境变量
+### 第四步：告诉 Bot 这个反代的存在
 
-在 Cloudflare Worker 的环境变量中添加：
+回到你的 Cloudflare Worker 页面：
 
-| 变量名 | 值 | 说明 |
-|--------|-----|------|
-| `PROXY_URL` | `https://你的项目名.vercel.app/api?url=` | 订阅链接会拼在后面作为 `url` 参数 |
+1. 进入 **sub-store-bot1** → **设置** → **变量与密钥**
+2. 添加环境变量：
+   - **变量名**：`PROXY_URL`
+   - **值**：`https://你的项目名.vercel.app/api?url=`
+   （把 `你的项目名.vercel.app` 换成第三步得到的域名）
+3. 点 **保存并部署**
 
-## 验证
+### 第五步：验证
+
+发一条之前拉取失败的订阅到 Bot，应该能正常出结果了。
+
+---
+
+## 怎么确认反代在工作？
 
 ```bash
-# 直连（可能 403）
-curl -s -o /dev/null -w "%{http_code}" "https://example-sub.com/link"  
+# 直连你原来的订阅（应该 403）
+curl -s -o /dev/null -w "%{http_code}" "https://你的订阅链接.com/xxx"
 # → 403
 
-# 走反代（应 200）
-curl -s -o /dev/null -w "%{http_code}" "https://你的项目名.vercel.app/api?url=https%3A%2F%2Fexample-sub.com%2Flink"
+# 走反代（应该 200）
+curl -s -o /dev/null -w "%{http_code}" "https://你的项目名.vercel.app/api?url=https%3A%2F%2F你的订阅链接.com%2Fxxx"
 # → 200
 ```
 
-## Bot 的 PROXY_URL 测试
-
-用 Bot 的 debug 接口验证：
+或者用 Bot 的 debug 接口：
 
 ```bash
-curl "https://你的worker域名/debug-fetch?token=你的DEBUG_TOKEN&url=https%3A%2F%2Fexample-sub.com%2Flink"
+curl "https://你的worker域名/debug-fetch?token=你的DEBUG_TOKEN&url=你的订阅链接（需要URL编码）"
 ```
 
 ## 注意事项
 
-- Vercel Serverless Function 有 10s 超时限制（Hobby 计划），大订阅可能超时
-- 反代理仅对 CF 防护的订阅生效，普通订阅 Bot 仍直连
-- 反代代码只做 URL 解码 + fetch + 透传，不解析/不修改内容
-- Vercel Hobby 计划每月 100h 函数运行时间，个人使用绰绰有余
+- Vercel Hobby 计划免费额度每月 100h 运行时间 + 10 秒函数超时，个人用绝对够
+- 太大会超时的订阅（10秒以上），考虑换其他平台（比如 Deno Deploy）
+- 反代只对 CF 防护的订阅生效，普通订阅 Bot 仍直连
+- 反代只透传内容，不做任何解析或修改
