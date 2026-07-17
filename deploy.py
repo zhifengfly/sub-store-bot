@@ -4,8 +4,6 @@ ACCOUNT = os.environ["CF_ACCOUNT_ID"]
 TOKEN = os.environ["CF_API_TOKEN"]
 NAME = os.getenv("CF_WORKER_NAME", "sub-store-bot")
 
-# 只更新代码，不动绑定/环境变量
-# /content 端点接受只包含 main_module 的 metadata
 BASE = f"https://api.cloudflare.com/client/v4/accounts/{ACCOUNT}/workers/scripts/{NAME}"
 
 meta = json.dumps({"main_module": "worker.mjs"})
