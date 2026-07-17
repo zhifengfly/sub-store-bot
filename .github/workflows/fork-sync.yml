@@ -63,7 +63,7 @@ jobs:
         env:
           CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
           CF_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
-          CF_WORKER_NAME: ${{ secrets.CF_WORKER_NAME || 'sub-store-bot' }}
+          CF_WORKER_NAME: ${{ secrets.CF_WORKER_NAME || github.event.repository.name }}
         run: |
           echo "🚀 部署代码到 Cloudflare..."
           python3 deploy.py
