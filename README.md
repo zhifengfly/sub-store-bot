@@ -36,21 +36,20 @@ Telegram Bot — 订阅转换 + 短链分享，内置完整 Sub-Store 引擎（8
 
 ## 一键部署
 
-1. 点这个按钮
 [![Deploy to Cloudflare Workers](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/Linsars/sub-store-bot)
-
-2. 在部署页面选择你的仓库
-3. 输入对应的 `ALLOWED_USERS`、`BOT_TOKEN`、`WEBHOOK_SECRET` 变量（部署后也可在 变量与密钥 页面改）
 
 部署完成后：
 
 1. 去 **域** 页面，打开域名路由或绑定自定义域名（可选）
 2. 去 **变量与密钥** 页面，添加环境变量：
+   - `ALLOWED_USERS` = 白名单ID（逗号分隔），不设则全部
+   - `BOT_TOKEN` = Telegram Bot Token
+   - `WEBHOOK_SECRET` = 域名防呆，随便设置个密码
    - `CLIP_URL` = 你的 Worker 域名，如 `https://xxx.workers.dev`（**必填**，短链基础 URL）
    - `PROXY_URL` = 反代地址，绕过 CF 拦截（可选，[搭建教程](docs/proxy-setup.md)）
    - `DEBUG_TOKEN` = 随意设个密码，用于 debug-fetch 接口鉴权（可选）
-3. 去 **描述** 页面，点 Worker 域名激活 bot
-4. Telegram 里发 `/start`
+4. 去 **描述** 页面，点 Worker 域名激活 bot
+5. Telegram 里发 `/start`
 
 ## 环境变量
 
