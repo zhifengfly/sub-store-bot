@@ -7,7 +7,7 @@
  *   - BOT_TOKEN — Telegram Bot Token
  * 
  * 部署格式: ES Module Worker
- * 需要 CF 兼容性标志: nodejs_compat
+ * 需要 CF 兼容性的标志: nodejs_compat
  */
 
 import { ProxyUtils } from './proxy-utils.esm.js';
