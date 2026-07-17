@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Sub-Store Bot — 一键部署脚本-
+Sub-Store Bot — 一键部署脚本
 使用前设置环境变量:
   export CLOUDFLARE_API_TOKEN="your_cf_api_token"
   export BOT_TOKEN="your_telegram_bot_token"
