@@ -1,6 +1,6 @@
 # Sub-Store Bot ☁️
 
-Telegram Bot — 订阅转换 + 短链分享，内置完整 Sub-Store 引擎（870KB）。
+Telegram Bot — 订阅转换 + 短链分享，内置 Sub-Store 转换引擎（870KB）。
 
 ---
 
@@ -54,13 +54,12 @@ Telegram Bot — 订阅转换 + 短链分享，内置完整 Sub-Store 引擎（8
 
 ### 同步本项目更新
 
-以后此仓库更新了，你的仓库不会自动同步。按以下步骤：
+以后此仓库更新了，你的仓库不会自动同步。有需要可以按以下步骤开启自动同步：
 
-1. 打开你的 GitHub 仓库，点 Add file → Create new file
+1. 打开你的 GitHub 仓库，点 **Add file** → **Create new file**
 2. 文件名填  .github/workflows/fork-sync.yml 
-3. 去  [_workflows/fork-sync.yml](_workflows/fork-sync.yml)  复制内容粘贴到你的fork-sync.yml 
-4. Commit
-5. 去 **Actions** 页面 → 绿色按钮启用 → 左侧点 **Fork Sync** → **Run workflow**
+3. 去  **[_workflows/fork-sync.yml](_workflows/fork-sync.yml)**  复制内容粘贴到你的fork-sync.yml  然后 **Commit** 
+4. 去 **Actions** 页面 → 轻点 **All workflow** → 选择 **Fork Sync** → 猛击 **Run workflow**
 
 
 ## 环境变量
