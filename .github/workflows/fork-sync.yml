@@ -37,12 +37,15 @@ jobs:
           ORIGIN_SHA="$(git rev-parse origin/main)"
           UPSTREAM_SHA="$(git rev-parse upstream/main)"
 
-          if [ "${ORIGIN_SHA}" = "${UPSTREAM_SHA}" ]; then
+          git checkout main
+          # 同步到 origin/main（上次同步的成果）
+          git reset --hard origin/main
+
+          # 检查上游是否已合入（复用 merge-base，不受 SHA 不同影响）
+          if git merge-base --is-ancestor upstream/main HEAD; then
             echo "✨ 已是最新，无需同步。"
             exit 0
           fi
-
-          git checkout main
 
           echo "🚀 合并上游 main..."
           # --allow-unrelated-histories: 一键部署是"源码导入"，无共同 git 历史
