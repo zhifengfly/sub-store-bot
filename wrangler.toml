@@ -4,7 +4,7 @@ compatibility_date = "2025-09-27"
 compatibility_flags = ["nodejs_compat"]
 workers_dev = true
 
-# KV Namespace（一键部署会自动创建）
+# KV Namespace（一键部署会自动创建的）
 # 如果用 GitHub Actions 部署，需要先创建 KV Namespace.
 # 把 ID 设为 Secret KV_ID，在 wrangler.toml 引用：
 [[kv_namespaces]]
