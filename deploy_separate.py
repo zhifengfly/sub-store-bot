@@ -2,19 +2,22 @@ import os, requests, json, sys
 
 ACCOUNT = os.environ['CLOUDFLARE_ACCOUNT_ID']
 TOKEN = os.environ['CLOUDFLARE_API_TOKEN']
-BOT = os.environ.get('BOT_TOKEN', '8967815462:AAG-uP6YWT3HopQjO58mb4ZFrvaIiysS9gU')
-NAME = sys.argv[1] if len(sys.argv) > 1 else os.environ.get('CF_WORKER_NAME', 'sub-store-bot1')
-BASE = f'https://api.cloudflare.com/client/v4/accounts/{ACCOUNT}/workers/scripts/{NAME}'
-KV_ID = '665b60772c2e464d9b76144d70c1fe94'
-DIR = '/var/minis/workspace/substore-bot-package'
+BOT = os.environ['BOT_TOKEN']
+NAME = sys.argv[1] if len(sys.argv) > 1 else os.environ.get('CF_WORKER_NAME', '')
+KV_ID = os.environ['KV_NAMESPACE_ID']
+DIR = os.path.dirname(os.path.abspath(__file__))
 
-# 1. 部署代码 + 非 secret bindings
-CLIP_URL = f'https://{NAME}.jidan666-919.workers.dev/'
+if not ACCOUNT or not TOKEN or not BOT or not NAME or not KV_ID:
+    print('Missing required env: CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_API_TOKEN, BOT_TOKEN, KV_NAMESPACE_ID, CF_WORKER_NAME')
+    sys.exit(1)
+
+BASE = f'https://api.cloudflare.com/client/v4/accounts/{ACCOUNT}/workers/scripts/{NAME}'
+CLIP_URL = f'https://{NAME}.{ACCOUNT.split("-")[0] if "-" in ACCOUNT else ACCOUNT}.workers.dev/'
+
 meta = json.dumps({
     'main_module': 'worker.mjs',
     'bindings': [
         {'name': 'KV', 'type': 'kv_namespace', 'namespace_id': KV_ID},
-        {'name': 'ALLOWED_USERS', 'type': 'plain_text', 'text': '5562061420'},
         {'name': 'CLIP_URL', 'type': 'plain_text', 'text': CLIP_URL},
     ]
 })
@@ -29,7 +32,6 @@ if not r.json().get('success'):
     sys.exit(1)
 print('Deploy code: OK')
 
-# 2. 通过 Secrets API 设 BOT_TOKEN
 r2 = requests.put(f'{BASE}/secrets', headers={
     'Authorization': f'Bearer {TOKEN}',
     'Content-Type': 'application/json',
