@@ -24,10 +24,7 @@ Telegram Bot — 订阅转换 + 短链分享，内置完整 Sub-Store 引擎（8
 | ⚙️ **设置** | UA 轮询配置 | 启用/禁用默认 UA、添加自定义 UA、恢复默认 |
 | | 反代支持 | 配置 `PROXY_URL` 绕过 CF-to-CF 订阅拉取拦截 |
 | | Debug 接口 | `DEBUG_TOKEN` 鉴权的 debug-fetch 端点 |
-| 🌐 **落地页** | 赛博风格 HTML | 从 GitHub 拉取，KV 缓存 24h，支持自定义 URL |
-| | 实时状态 | 节点数、有效期、访问次数展示 + TTL/访问进度条 |
-| | 攻防词滚动 | alive 页滚入侵成功术语，consumed 页滚攻防失败日志 |
-| | 伪下载模拟 | 链接失效时显示伪下载进度条 + 赛博刷屏 |
+| 🌐 **落地页** | 梅开二度 | 赛博风格 HTML 反向代理，可自定义 HTML 地址 |
 | 🔐 **安全** | Webhook 校验 | `WEBHOOK_SECRET` 请求头验证，防未授权调用 |
 
 ## 按钮说明
@@ -67,6 +64,7 @@ Telegram Bot — 订阅转换 + 短链分享，内置完整 Sub-Store 引擎（8
    - `CLIP_URL` = 你的 Worker 域名，如 `https://xxx.workers.dev`（**必填**，短链基础 URL）
    - `PROXY_URL` = 反代地址，绕过 CF 拦截（可选，[搭建教程](docs/proxy-setup.md)）
    - `DEBUG_TOKEN` = 随意设个密码，用于 debug-fetch 接口鉴权（可选）
+   - `LANDING_HTML_URL` = 自定义落地页 HTML，不设则用默认（可选）
 4. 去 **描述** 页面，点 Worker 域名激活 bot
 5. Telegram 里发 `/start`
 
