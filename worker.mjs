@@ -40,6 +40,35 @@ function escapeHTML(s) {
   return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
+// Atomic IP counting + access limit (PR #1, burn handled at route level)
+async function atomicTrackIP(env, id, clientIP, maxIPs, ttl) {
+  const key = 'share_' + id;
+  for (let i = 0; i < 5; i++) {
+    let data;
+    try {
+      data = await env.KV.getWithMetadata(key, { type: 'json' });
+    } catch { return { consumed: false, isNewIP: false, error: 'kv_read' }; }
+    if (!data.value && !data.value === null) return { consumed: false, isNewIP: false, error: 'not_found' };
+    const raw = data.value || {};
+    if (raw.consumed) return { consumed: true, isNewIP: false };
+    const ips = Array.isArray(raw.accessedIPs) ? raw.accessedIPs : [];
+    if (!ips.includes(clientIP)) {
+      const next = [...ips, clientIP];
+      const updated = { ...raw, accessedIPs: next };
+      const opts = {};
+      if (ttl && ttl > 0) opts.expirationTtl = ttl;
+      if (data.metadata && data.metadata.version !== undefined) opts.ifVersion = data.metadata.version;
+      try {
+        await env.KV.put(key, JSON.stringify(updated), opts);
+        return { consumed: false, isNewIP: true, count: next.length, exceeded: maxIPs > 0 && next.length > maxIPs };
+      } catch { continue; }
+    } else {
+      return { consumed: false, isNewIP: false, count: ips.length, exceeded: maxIPs > 0 && ips.length >= maxIPs };
+    }
+  }
+  return { consumed: false, isNewIP: false, error: 'max_retries' };
+}
+
 // ==================== 按钮布局 ====================
 
 function mainKb() {
@@ -1988,34 +2017,30 @@ export default {
 
       // ===== 落地页模式（landing + 非 ?raw 请求） =====
       if (teaming && !isRaw) {
-        let consumed = false;
+        let consumed = raw.consumed || false;
 
-        // 阅后即焚：标记 consumed 但不删 KV
-        // 注意：落地页模式下不设本地 consumed，让用户先看到真链
+        // 阅后即焚：落地页首次访问展示真链并标记消耗
         if (burn) {
-          ctx.waitUntil(env.KV.put('share_' + id,
-            JSON.stringify({ ...raw, consumed: true }), { expirationTtl: 120 }
-          ).catch(() => {}));
+          const ipResult = await atomicTrackIP(env, id, clientIP, 0, ttl);
+          if (!ipResult.error && !ipResult.consumed) {
+            await env.KV.put('share_' + id, JSON.stringify({ ...raw, consumed: true }), ttl > 0 ? { expirationTtl: ttl < 60 ? 60 : ttl } : {});
+          } else if (ipResult.consumed) {
+            consumed = true;
+          }
         }
 
         // 独立 IP 上限
-        if (!consumed && maxIPs > 0 && accessedIPs.length >= maxIPs) {
-          consumed = true;
-          ctx.waitUntil(env.KV.put('share_' + id,
-            JSON.stringify({ ...raw, consumed: true }), { expirationTtl: 120 }
-          ).catch(() => {}));
+        if (!consumed && maxIPs > 0) {
+          const ipResult = await atomicTrackIP(env, id, clientIP, maxIPs, ttl);
+          if (ipResult.consumed) {
+            consumed = true;
+            await env.KV.put('share_' + id, JSON.stringify({ ...raw, consumed: true }), ttl > 0 ? { expirationTtl: ttl < 60 ? 60 : ttl } : {});
+          }
         }
 
-        // 新 IP 计数（还没消耗才记）
-        if (!consumed) {
-          const isNewIP = !accessedIPs.includes(clientIP);
-          const kvOpts = ttl > 0 ? { expirationTtl: ttl < 60 ? 60 : ttl } : {};
-          if (isNewIP || maxIPs > 0) {
-            ctx.waitUntil(env.KV.put('share_' + id,
-              JSON.stringify({ ...raw, accessedIPs: isNewIP ? [...accessedIPs, clientIP] : accessedIPs }),
-              kvOpts
-            ).catch(() => {}));
-          }
+        // 普通访问：记 IP
+        if (!consumed && !burn) {
+          await atomicTrackIP(env, id, clientIP, 0, ttl);
         }
 
         // 获取落地页 HTML（从 GitHub 拉取，KV 缓存 24h）
