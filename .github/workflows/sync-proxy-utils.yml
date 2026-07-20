@@ -45,6 +45,12 @@ jobs:
             echo "changed=false" >> $GITHUB_OUTPUT
           fi
 
+      - name: Upload built bundle as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: proxy-utils-bundle
+          path: proxy-utils.esm.js
+
       - name: Commit updated bundle
         if: steps.changed.outputs == 'true'
         run: |
