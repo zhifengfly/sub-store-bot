@@ -46,7 +46,7 @@ jobs:
           fi
 
       - name: Commit and annotate
-        if: steps.changed.outputs == 'true'
+        if: steps.changed.outputs.changed == 'true'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
@@ -56,6 +56,6 @@ jobs:
           echo "::notice title=Engine Update::proxy-utils.esm.js 已更新并推送"
 
       - name: No change notice
-        if: steps.changed.outputs == 'false'
+        if: steps.changed.outputs.changed == 'false'
         run: |
           echo "::notice title=Engine Update::Sub-Store 引擎已是最新，无变化"
