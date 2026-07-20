@@ -32,7 +32,7 @@ async function bundle() {
     const r = await esb.build({
       entryPoints: [path.join(BUILD, 'src/core/proxy-utils/index.js')],
       bundle: true, write: false, format: 'esm', platform: 'node',
-      target: 'es2022', minify: true, treeShaking: true,
+      target: 'es2022', minify: false, treeShaking: true,
       define: { 'process.env.NODE_ENV': '"production"' },
       external: ['crypto', 'path', 'util', 'stream', 'os', 'url', 'process', 'fs', 'net', 'tls', 'http', 'zlib', 'assert', 'events', 'querystring', 'string_decoder', 'dns'],
       alias: { '@': path.join(BUILD, 'src'), 'buffer': path.join(__dirname, 'buffer_shim.js') },
