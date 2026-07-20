@@ -31,15 +31,38 @@ async function bundle() {
     console.log('Using esbuild');
     const r = await esb.build({
       entryPoints: [path.join(BUILD, 'src/core/proxy-utils/index.js')],
-      bundle: true, write: false, format: 'esm', platform: 'node', target: 'es2022',
+      bundle: true, write: false, format: 'cjs', platform: 'node', target: 'node20',
       minify: true, treeShaking: true,
-      define: { 'process.env.NODE_ENV': '"production"' },
-      alias: { '@': path.join(BUILD, 'src'), 'buffer': path.join(BUILD, 'src/buffer.js') },
+      define: {},
+      alias: { '@': path.join(BUILD, 'src') },
       nodePaths: [path.join(ROOT, 'node_modules')],
     });
-    let c = r.outputFiles[0].text;
-    if (!c.includes('process.env'))
-      c = 'var process={env:{NODE_ENV:"production"},nextTick:cb=>cb(),platform:"",version:""};\n' + c;
+    let c = r.outputFiles[0].text, shim = `/* Workers require() compat shim */
+const __r=function(){var m={};
+try{m['buffer']={Buffer:globalThis.Buffer}}catch(e){}
+try{m['path']={join:function(){return''},resolve:function(p){return p}}}catch(e){}
+try{m['crypto']={}}catch(e){}
+try{m['stream']={}}catch(e){}
+try{m['string_decoder']={}}catch(e){}
+try{m['os']={}}catch(e){}
+try{m['assert']={}}catch(e){}
+try{m['util']={}}catch(e){}
+try{m['events']={}}catch(e){}
+try{m['http']={}}catch(e){}
+try{m['https']={}}catch(e){}
+try{m['url']={URL:globalThis.URL,URLSearchParams:globalThis.URLSearchParams}}catch(e){}
+try{m['net']={}}catch(e){}
+try{m['tls']={}}catch(e){}
+try{m['fs']={}}catch(e){}
+try{m['querystring']={}}catch(e){}
+try{m['process']=typeof process<"u"?process:{}}catch(e){}
+return function(n){return m[n]||{}};}();
+var require=__r;`;
+    c = shim + c;
+    if (!c.includes('_exports ='))
+      c += '\nexport const ProxyUtils = (typeof _PU_exports !== "undefined" ? _PU_exports : ((typeof module !== "undefined" && module.exports) || {})).ProxyUtils;\n';
+    else
+      c += '\nexport default _exports.ProxyUtils;\n';
     fs.writeFileSync(OUTPUT, c);
     console.log('Output:', OUTPUT, 'size:', (fs.statSync(OUTPUT).size/1024).toFixed(1)+'KB');
   } else {
