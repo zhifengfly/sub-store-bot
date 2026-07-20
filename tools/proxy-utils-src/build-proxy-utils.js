@@ -39,7 +39,8 @@ async function bundle() {
       nodePaths: [path.join(ROOT, 'node_modules')],
     });
     let c = r.outputFiles[0].text;
-    fs.writeFileSync(OUTPUT, c);
+    // Tiny require shim for process (used by yaml library)
+    c = 'var require=function(n){if(n==="process"||n==="node:process")return typeof process!=="undefined"?process:{};throw Error("require: "+n+" not available")};\n' + c;
     console.log('Output:', OUTPUT, 'size:', (fs.statSync(OUTPUT).size/1024).toFixed(1)+'KB');
   } else {
     console.log('esbuild unavailable, using rollup');
