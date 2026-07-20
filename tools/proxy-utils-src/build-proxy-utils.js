@@ -31,11 +31,11 @@ async function bundle() {
     console.log('Using esbuild');
     const r = await esb.build({
       entryPoints: [path.join(BUILD, 'src/core/proxy-utils/index.js')],
-      bundle: true, write: false, format: 'esm', platform: 'browser', target: 'es2022',
+      bundle: true, write: false, format: 'esm', platform: 'node', target: 'es2022',
       minify: true, treeShaking: true,
       define: { 'process.env.NODE_ENV': '"production"' },
-      alias: { '@': path.join(BUILD, 'src'), 'buffer': path.join(BUILD, 'src/buffer.js') },
-      nodePaths: [path.join(ROOT, 'node_modules')],
+      alias: { '@': path.join(BUILD, 'src') },
+      external: ['buffer'],
     });
     let c = r.outputFiles[0].text;
     if (!c.includes('const process'))
