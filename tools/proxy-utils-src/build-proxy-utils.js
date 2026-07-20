@@ -31,15 +31,48 @@ async function bundle() {
     console.log('Using esbuild');
     const r = await esb.build({
       entryPoints: [path.join(BUILD, 'src/core/proxy-utils/index.js')],
-      bundle: true, write: false, format: 'esm', platform: 'node', target: 'es2022',
+      bundle: true, write: false, format: 'cjs', platform: 'node', target: 'node20',
       minify: true, treeShaking: true,
-      define: { 'process.env.NODE_ENV': '"production"' },
-      alias: { '@': path.join(BUILD, 'src'), 'buffer': path.join(BUILD, 'src/buffer.js') },
-      external: [],
+      define: {},
+      alias: { '@': path.join(BUILD, 'src') },
     });
     let c = r.outputFiles[0].text;
-    if (!c.includes('const process'))
-      c = 'const process={env:{NODE_ENV:"production"},nextTick:cb=>cb(),platform:"",version:""};\n' + c;
+    // Prepend comprehensive require shim for CF Workers (copied from MiniSubConvert)
+    const shim = `/* Workers require() compatibility shim */
+const __workers_require = (function() {
+    var m = {};
+    try { m['buffer'] = { Buffer: globalThis.Buffer }; } catch(e) {}
+    try { m['path'] = { join:function(){return arguments[arguments.length-1]||''},resolve:function(){return arguments[arguments.length-1]||''},dirname:function(){return arguments[0]||'.'}}; } catch(e) {}
+    try { m['crypto'] = {}; } catch(e) {}
+    try { m['stream'] = {}; } catch(e) {}
+    try { m['assert'] = {}; } catch(e) {}
+    try { m['util'] = {}; } catch(e) {}
+    try { m['os'] = {}; } catch(e) {}
+    try { m['fs'] = {}; } catch(e) {}
+    try { m['net'] = {}; } catch(e) {}
+    try { m['tls'] = {}; } catch(e) {}
+    try { m['child_process'] = {}; } catch(e) {}
+    try { m['http'] = {}; } catch(e) {}
+    try { m['https'] = {}; } catch(e) {}
+    try { m['url'] = {}; } catch(e) {}
+    try { m['zlib'] = {}; } catch(e) {}
+    try { m['querystring'] = {}; } catch(e) {}
+    try { m['string_decoder'] = {}; } catch(e) {}
+    try { m['events'] = {}; } catch(e) {}
+    try { m['readline'] = {}; } catch(e) {}
+    try { m['dns'] = {}; } catch(e) {}
+    try { m['dgram'] = {}; } catch(e) {}
+    try { m['cluster'] = {}; } catch(e) {}
+    try { m['module'] = {}; } catch(e) {}
+    try { m['timers'] = {}; } catch(e) {}
+    try { m['console'] = {}; } catch(e) {}
+    try { m['process'] = typeof process !== 'undefined' ? process : {}; } catch(e) {}
+    return function(name) { return m[name] || {}; };
+})();
+var require = __workers_require;
+try { process.env.NODE_ENV='production'; } catch(e) {}
+`;
+    c = shim + c + '\nexport{ProxyUtils as default};';
     fs.writeFileSync(OUTPUT, c);
     console.log('Output:', OUTPUT, 'size:', (fs.statSync(OUTPUT).size/1024).toFixed(1)+'KB');
   } else {
