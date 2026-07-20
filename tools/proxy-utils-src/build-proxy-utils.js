@@ -66,7 +66,6 @@ const __workers_require = (function() {
     };
 })();
 var require = __workers_require;
-`;`;
     c = shim + c + '\nexport const ProxyUtils = (typeof pu !== "undefined" ? pu : {}).ProxyUtils;\n';
     fs.writeFileSync(OUTPUT, c);
     console.log('Output:', OUTPUT, 'size:', (fs.statSync(OUTPUT).size/1024).toFixed(1)+'KB');
