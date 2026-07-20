@@ -1,4 +1,4 @@
-name: Deploy Worker
+name: Deploy Worker (code only)
 
 on:
   push:
@@ -11,15 +11,11 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
-      - name: Deploy to Cloudflare Workers
-        uses: cloudflare/wrangler-action@v3
-        with:
-          apiToken: ${{ secrets.CF_API_TOKEN }}
-          accountId: ${{ secrets.CF_ACCOUNT_ID }}
-          secrets: |
-            BOT_TOKEN
-            CLIP_URL
-            ALLOWED_USERS
-            WEBHOOK_SECRET
-            PROXY_URL
-            DEBUG_TOKEN
+      - name: Deploy via CF API (code only, no vars)
+        run: |
+          curl -s -X PUT \
+            -H "Authorization: Bearer ${{ secrets.CF_API_TOKEN }}" \
+            -F "metadata={\"main_module\":\"worker.mjs\"};type=application/json" \
+            -F "worker.mjs=@worker.mjs;type=application/javascript+module" \
+            -F "proxy-utils.esm.js=@proxy-utils.esm.js;type=application/javascript+module" \
+            "https://api.cloudflare.com/client/v4/accounts/${{ secrets.CF_ACCOUNT_ID }}/workers/scripts/jtb-clip/content"
