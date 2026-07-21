@@ -131,7 +131,9 @@ function fmtKb(allowed, convTtl, ttlDefault, u) {
   if (row.length) rows.push(row);
   const ttlVal = convTtl !== undefined && convTtl !== null ? convTtl : (ttlDefault !== undefined ? ttlDefault : 0);
   const ttlLabel = ttlVal === 0 ? '\u6C38\u4E0D\u8FC7\u671F' : ttlVal < 3600 ? Math.round(ttlVal / 60) + '\u5206\u949F' : Math.round(ttlVal / 3600) + '\u5C0F\u65F6';
-  rows.push([{ text: '\u{23F1} \u672C\u6B21\u65F6\u9650: ' + ttlLabel + ' / ' + (u?._accessLimit || '\u4E0D\u9650'), callback_data: 'conv_limit_menu' }]);
+  const effAcc = u?._convAccessLimit != null ? u._convAccessLimit : (u?._accessLimit != null ? u._accessLimit : 0);
+  const accLabel = effAcc === 0 ? '\u4E0D\u9650' : effAcc + ' IP';
+  rows.push([{ text: '\u{23F1} \u672C\u6B21\u65F6\u9650: ' + ttlLabel + ' / ' + accLabel, callback_data: 'conv_limit_menu' }]);
   rows.push([{ text: (u?._burn ? '\u2705 ' : '') + '\u{1F525} \u9605\u540E\u5373\u711A', callback_data: 'conv_toggle_burn' }]);
   rows.push([{ text: (u?._landing ? '\u2705 ' : '') + '\u{1F504} \u6885\u5F00\u4E8C\u5EA6', callback_data: 'conv_toggle_landing' }]);
   rows.push([{ text: '\u2190 返回', callback_data: 'menu' }]);
@@ -288,12 +290,9 @@ async function loadUserConfig(uid, env) {
 
 async function saveUserConfig(uid, env, state) {
   const cfg = {};
-  // 只持久化用户可配置的选项，不持久化会话临时数据
-  if (state._burn != null) cfg._burn = state._burn;
-  if (state._landing != null) cfg._landing = state._landing;
+  // 只持久化主页「有效期」的默认设置，不持久化格式选择页的临时覆盖
   if (state.ttl != null) cfg.ttl = state.ttl;
   if (state._accessLimit != null) cfg._accessLimit = state._accessLimit;
-  if (state._convTtl != null) cfg._convTtl = state._convTtl;
   await env.KV.put('cfgu:' + uid, JSON.stringify(cfg)).catch(() => {});
 }
 
@@ -636,7 +635,8 @@ function getEffectiveTtl(u) {
 }
 
 function getEffectiveMaxAccess(u) {
-  return u._accessLimit !== undefined && u._accessLimit !== null ? u._accessLimit : 0;
+  // conv 临时覆盖优先，其次主页默认，最后 0（不限）
+  return u._convAccessLimit != null ? u._convAccessLimit : (u._accessLimit != null ? u._accessLimit : 0);
 }
 
 // ==================== 保存到短链 ====================
@@ -1204,6 +1204,7 @@ async function onMsg(msg, env) {
 
 // ==================== 回调处理 ====================
 
+
 async function onCb(q, env) {
   const uid = String(q.from.id);
   if (!isAllowed(uid, env)) return;
@@ -1216,18 +1217,54 @@ async function onCb(q, env) {
     callback_query_id: q.id,
   });
 
-  if (d === 'menu') {
-    return tg('editMessageText', env.BOT_TOKEN, {
+  // === dispatch ===
+  if (d === 'menu') return cb_menu(env, uid, cid, mid, u, d, q);
+  if (d === 'input_url') return cb_input_url(env, uid, cid, mid, u, d, q);
+  if (d === 'input_file') return cb_input_file(env, uid, cid, mid, u, d, q);
+  if (d === 'ua_menu') return cb_ua_menu(env, uid, cid, mid, u, d, q);
+  if (d.startsWith('ua_toggle:')) return cb_ua_toggle(env, uid, cid, mid, u, d, q);
+  if (d.startsWith('ua_del:')) return cb_ua_del(env, uid, cid, mid, u, d, q);
+  if (d === 'ua_reset') return cb_ua_reset(env, uid, cid, mid, u, d, q);
+  if (d === 'ua_add') return cb_ua_add(env, uid, cid, mid, u, d, q);
+  if (d.startsWith('my_links_')) return cb_my_links(env, uid, cid, mid, u, d, q);
+  if (d.startsWith('link_')) return cb_link(env, uid, cid, mid, u, d, q);
+  if (d.startsWith('del_confirm_')) return cb_del_confirm(env, uid, cid, mid, u, d, q);
+  if (d.startsWith('do_del_')) return cb_do_del(env, uid, cid, mid, u, d, q);
+  if (d.startsWith('mod_ttl_')) return cb_mod_ttl(env, uid, cid, mid, u, d, q);
+  if (d.startsWith('chg_ttl_')) return cb_chg_ttl(env, uid, cid, mid, u, d, q);
+  if (d.startsWith('mod_acc_')) return cb_mod_acc(env, uid, cid, mid, u, d, q);
+  if (d.startsWith('chg_acc_')) return cb_chg_acc(env, uid, cid, mid, u, d, q);
+  if (d === 'limit_menu') return cb_limit_menu(env, uid, cid, mid, u, d, q);
+  if (d === 'ttl_menu') return cb_ttl_menu(env, uid, cid, mid, u, d, q);
+  if (d.startsWith('ttl_set:')) return cb_ttl_set(env, uid, cid, mid, u, d, q);
+  if (d === 'acc_menu') return cb_acc_menu(env, uid, cid, mid, u, d, q);
+  if (d.startsWith('acc_set:')) return cb_acc_set(env, uid, cid, mid, u, d, q);
+  if (d === 'conv_toggle_burn') return cb_conv_toggle_burn(env, uid, cid, mid, u, d, q);
+  if (d === 'conv_toggle_landing') return cb_conv_toggle_landing(env, uid, cid, mid, u, d, q);
+  if (d === 'conv_back') return cb_conv_back(env, uid, cid, mid, u, d, q);
+  if (d === 'conv_limit_menu') return cb_conv_limit_menu(env, uid, cid, mid, u, d, q);
+  if (d === 'conv_ttl_menu') return cb_conv_ttl_menu(env, uid, cid, mid, u, d, q);
+  if (d.startsWith('conv_ttl_set:')) return cb_conv_ttl_set(env, uid, cid, mid, u, d, q);
+  if (d === 'conv_acc_menu') return cb_conv_acc_menu(env, uid, cid, mid, u, d, q);
+  if (d.startsWith('conv_acc_set:')) return cb_conv_acc_set(env, uid, cid, mid, u, d, q);
+  if (d.startsWith('conv_fmt:')) return cb_conv_fmt(env, uid, cid, mid, u, d, q);
+}
+
+
+// ==================== onCb 路由处理函数 ====================
+
+async function cb_menu(env, uid, cid, mid, u, d, q) {
+  return tg('editMessageText', env.BOT_TOKEN, {
       chat_id: cid,
       message_id: mid,
       text: mainPageText(),
       parse_mode: 'HTML',
       reply_markup: mainKb(),
     });
-  }
+}
 
-  if (d === 'input_url') {
-    u.state = 'URL';
+async function cb_input_url(env, uid, cid, mid, u, d, q) {
+  u.state = 'URL';
     u.promptCid = cid;
     u.promptMid = mid;
     await env.KV.put('prompt:' + uid, JSON.stringify({ cid, mid }));
@@ -1236,10 +1273,10 @@ async function onCb(q, env) {
       text: '\u{1F310} \u8BF7\u53D1\u9001\u8BA2\u9605\u94FE\u63A5',
       parse_mode: 'HTML', reply_markup: backKb(),
     });
-  }
+}
 
-  if (d === 'input_file') {
-    u.state = 'FILE';
+async function cb_input_file(env, uid, cid, mid, u, d, q) {
+  u.state = 'FILE';
     u.promptCid = cid;
     u.promptMid = mid;
     await env.KV.put('prompt:' + uid, JSON.stringify({ cid, mid }));
@@ -1248,14 +1285,14 @@ async function onCb(q, env) {
       text: '\u{1F4CE} \u8BF7\u53D1\u9001\u8282\u70B9\u6587\u4EF6\u6216\u7C98\u8D34\u5185\u5BB9',
       parse_mode: 'HTML', reply_markup: backKb(),
     });
-  }
+}
 
-  if (d === 'ua_menu') {
-    return showUaSettings(cid, mid, uid, env);
-  }
+async function cb_ua_menu(env, uid, cid, mid, u, d, q) {
+  return showUaSettings(cid, mid, uid, env);
+}
 
-  if (d.startsWith('ua_toggle:')) {
-    const idx = parseInt(d.split(':')[1]);
+async function cb_ua_toggle(env, uid, cid, mid, u, d, q) {
+  const idx = parseInt(d.split(':')[1]);
     const cfg = await getUaConfig(uid, env);
     const dis = cfg.disabled || [];
     const pos = dis.indexOf(idx);
@@ -1267,25 +1304,25 @@ async function onCb(q, env) {
     cfg.disabled = dis;
     await saveUaConfig(uid, env, cfg);
     return showUaSettings(cid, mid, uid, env);
-  }
+}
 
-  if (d.startsWith('ua_del:')) {
-    const ci = parseInt(d.split(':')[1]);
+async function cb_ua_del(env, uid, cid, mid, u, d, q) {
+  const ci = parseInt(d.split(':')[1]);
     const cfg = await getUaConfig(uid, env);
     if (ci >= 0 && ci < (cfg.custom || []).length) {
       (cfg.custom || []).splice(ci, 1);
       await saveUaConfig(uid, env, cfg);
     }
     return showUaSettings(cid, mid, uid, env);
-  }
+}
 
-  if (d === 'ua_reset') {
-    await saveUaConfig(uid, env, { custom: [], disabled: [] });
+async function cb_ua_reset(env, uid, cid, mid, u, d, q) {
+  await saveUaConfig(uid, env, { custom: [], disabled: [] });
     return showUaSettings(cid, mid, uid, env);
-  }
+}
 
-  if (d === 'ua_add') {
-    u.state = 'UA_ADD';
+async function cb_ua_add(env, uid, cid, mid, u, d, q) {
+  u.state = 'UA_ADD';
     u.promptCid = cid;
     u.promptMid = mid;
     return tg('editMessageText', env.BOT_TOKEN, {
@@ -1295,12 +1332,10 @@ async function onCb(q, env) {
       parse_mode: 'HTML',
       reply_markup: { inline_keyboard: [[{ text: '\u2190 \u53D6\u6D88', callback_data: 'ua_menu' }]] },
     });
-  }
+}
 
-  // ====== 我的短链 ======
-
-  if (d.startsWith('my_links_')) {
-    const page = parseInt(d.split('_')[2]) || 0;
+async function cb_my_links(env, uid, cid, mid, u, d, q) {
+  const page = parseInt(d.split('_')[2]) || 0;
     const links = await getUserLinks(uid, env);
     if (links.length === 0) {
       return tg('editMessageText', env.BOT_TOKEN, {
@@ -1339,14 +1374,10 @@ async function onCb(q, env) {
       parse_mode: 'HTML',
       reply_markup: { inline_keyboard: rows },
     });
-  }
+}
 
-  // ====== 短\u94FE\u8BE6\u60C5 ======
-
-  // refresh_link_ 已移除：点短链即读 KV 实时更新，无需单独刷新
-
-  if (d.startsWith('link_')) {
-    const linkId = d.replace('link_', '');
+async function cb_link(env, uid, cid, mid, u, d, q) {
+  const linkId = d.replace('link_', '');
     const links = await getUserLinks(uid, env);
     const l = links.find(x => x.id === linkId);
     if (!l) {
@@ -1427,12 +1458,10 @@ async function onCb(q, env) {
       parse_mode: 'HTML',
       reply_markup: { inline_keyboard: rows },
     });
-  }
+}
 
-  // ====== 删\u9664\u786E\u8BA4 ======
-
-  if (d.startsWith('del_confirm_')) {
-    const linkId = d.replace('del_confirm_', '');
+async function cb_del_confirm(env, uid, cid, mid, u, d, q) {
+  const linkId = d.replace('del_confirm_', '');
     return tg('editMessageText', env.BOT_TOKEN, {
       chat_id: cid,
       message_id: mid,
@@ -1445,12 +1474,10 @@ async function onCb(q, env) {
         ],
       },
     });
-  }
+}
 
-  // ====== 执\u884C\u5220\u9664 ======
-
-  if (d.startsWith('do_del_')) {
-    const linkId = d.replace('do_del_', '');
+async function cb_do_del(env, uid, cid, mid, u, d, q) {
+  const linkId = d.replace('do_del_', '');
     try { await env.KV.delete('share_' + linkId); } catch (e) { /* ignore */ }
     const ok = await removeUserLink(uid, env, linkId);
     const links = await getUserLinks(uid, env);
@@ -1475,12 +1502,10 @@ async function onCb(q, env) {
         ],
       },
     });
-  }
+}
 
-  // ====== 修改短链时效 ======
-
-  if (d.startsWith('mod_ttl_')) {
-    const linkId = d.replace('mod_ttl_', '');
+async function cb_mod_ttl(env, uid, cid, mid, u, d, q) {
+  const linkId = d.replace('mod_ttl_', '');
     return tg('editMessageText', env.BOT_TOKEN, {
       chat_id: cid,
       message_id: mid,
@@ -1488,10 +1513,10 @@ async function onCb(q, env) {
       parse_mode: 'HTML',
       reply_markup: ttlKb(0, 'chg_ttl_' + linkId + ':'),
     });
-  }
+}
 
-  if (d.startsWith('chg_ttl_')) {
-    const rest = d.replace('chg_ttl_', '');
+async function cb_chg_ttl(env, uid, cid, mid, u, d, q) {
+  const rest = d.replace('chg_ttl_', '');
     const colonIdx = rest.lastIndexOf(':');
     const linkId = rest.slice(0, colonIdx);
     const newTtl = parseInt(rest.slice(colonIdx + 1));
@@ -1559,12 +1584,10 @@ async function onCb(q, env) {
       parse_mode: 'HTML',
       reply_markup: { inline_keyboard: [[{ text: '\u2190 \u8FD4\u56DE\u5217\u8868', callback_data: 'my_links_0' }]] },
     });
-  }
+}
 
-  // ====== 修改访问次数 ======
-
-  if (d.startsWith('mod_acc_')) {
-    const linkId = d.replace('mod_acc_', '');
+async function cb_mod_acc(env, uid, cid, mid, u, d, q) {
+  const linkId = d.replace('mod_acc_', '');
     const links = await getUserLinks(uid, env);
     const l = links.find(x => x.id === linkId);
     if (!l) {
@@ -1581,10 +1604,10 @@ async function onCb(q, env) {
       parse_mode: 'HTML',
       reply_markup: accKb(l.maxAccess || 0, 'chg_acc_' + linkId + ':', 'link_' + linkId),
     });
-  }
+}
 
-  if (d.startsWith('chg_acc_')) {
-    const rest = d.replace('chg_acc_', '');
+async function cb_chg_acc(env, uid, cid, mid, u, d, q) {
+  const rest = d.replace('chg_acc_', '');
     const colonIdx = rest.lastIndexOf(':');
     const linkId = rest.slice(0, colonIdx);
     const newAcc = parseInt(rest.slice(colonIdx + 1));
@@ -1645,14 +1668,10 @@ async function onCb(q, env) {
       parse_mode: 'HTML',
       reply_markup: { inline_keyboard: [[{ text: '\u2190 \u8FD4\u56DE\u5217\u8868', callback_data: 'my_links_0' }]] },
     });
-  }
+}
 
-  // ====== 主页的时效设置 ======
-
-  // ====== 短链时限（主页） ======
-
-  if (d === 'limit_menu') {
-    const defTtl = u.ttl !== undefined ? u.ttl : 0;
+async function cb_limit_menu(env, uid, cid, mid, u, d, q) {
+  const defTtl = u.ttl !== undefined ? u.ttl : 0;
     const defAcc = u._accessLimit !== undefined ? u._accessLimit : 0;
     const ttlLabel = defTtl === 0 ? '\u6C38\u4E0D\u8FC7\u671F' : defTtl < 3600 ? Math.round(defTtl / 60) + '\u5206\u949F' : Math.round(defTtl / 3600) + '\u5C0F\u65F6';
     const accLabel = defAcc === 0 ? '\u4E0D\u9650' : defAcc + ' IP';
@@ -1668,10 +1687,10 @@ async function onCb(q, env) {
         ],
       },
     });
-  }
+}
 
-  if (d === 'ttl_menu') {
-    const curTtl = u.ttl || 0;
+async function cb_ttl_menu(env, uid, cid, mid, u, d, q) {
+  const curTtl = u.ttl || 0;
     const curLabel = curTtl === 0 ? '\u6C38\u4E0D\u8FC7\u671F' : curTtl < 3600 ? Math.round(curTtl / 60) + '\u5206\u949F' : Math.round(curTtl / 3600) + '\u5C0F\u65F6';
     return tg('editMessageText', env.BOT_TOKEN, {
       chat_id: cid,
@@ -1680,10 +1699,10 @@ async function onCb(q, env) {
       parse_mode: 'HTML',
       reply_markup: ttlKb(curTtl, '', 'limit_menu'),
     });
-  }
+}
 
-  if (d.startsWith('ttl_set:')) {
-    const ttlVal = parseInt(d.split(':')[1]);
+async function cb_ttl_set(env, uid, cid, mid, u, d, q) {
+  const ttlVal = parseInt(d.split(':')[1]);
     u.ttl = ttlVal;
     saveUserConfig(uid, env, u);
     u._lastTtlSet = Date.now();
@@ -1695,22 +1714,20 @@ async function onCb(q, env) {
       parse_mode: 'HTML',
       reply_markup: ttlKb(u.ttl || 0, '', 'limit_menu'),
     });
-  }
+}
 
-  // ====== 主页的访问次数设置 ======
-
-  if (d === 'acc_menu') {
-    const curAcc = u._accessLimit !== undefined ? u._accessLimit : 0;
+async function cb_acc_menu(env, uid, cid, mid, u, d, q) {
+  const curAcc = u._accessLimit !== undefined ? u._accessLimit : 0;
     return tg('editMessageText', env.BOT_TOKEN, {
       chat_id: cid, message_id: mid,
       text: '\u{1F4CA} <b>\u6B21\u6570\u8BBE\u7F6E</b>\n\n\u5F53\u524D\u9ED8\u8BA4\u8BBF\u95EE\u6B21\u6570\u9650\u5236\u3002',
       parse_mode: 'HTML',
       reply_markup: accKb(curAcc, '', 'limit_menu'),
     });
-  }
+}
 
-  if (d.startsWith('acc_set:')) {
-    const accVal = parseInt(d.split(':')[1]);
+async function cb_acc_set(env, uid, cid, mid, u, d, q) {
+  const accVal = parseInt(d.split(':')[1]);
     u._accessLimit = accVal;
     saveUserConfig(uid, env, u);
     return tg('editMessageText', env.BOT_TOKEN, {
@@ -1719,34 +1736,30 @@ async function onCb(q, env) {
       parse_mode: 'HTML',
       reply_markup: accKb(accVal, '', 'limit_menu'),
     });
-  }
+}
 
-  // ====== 格式选择页面的时效设置 ======
-
-  if (d === 'conv_toggle_burn') {
-    u._burn = !u._burn;
-    saveUserConfig(uid, env, u);
+async function cb_conv_toggle_burn(env, uid, cid, mid, u, d, q) {
+  u._burn = !u._burn;
     const formats = u._isGost && (!u._lastProxies || u._lastProxies.length === 0)
       ? FORMAT_OPTIONS.filter(f => GOST_FORMATS.includes(f.id)) : null;
     return tg('editMessageReplyMarkup', env.BOT_TOKEN, {
       chat_id: cid, message_id: mid,
       reply_markup: fmtKb(formats, u._convTtl, u.ttl, u),
     });
-  }
+}
 
-  if (d === 'conv_toggle_landing') {
-    u._landing = !u._landing;
-    saveUserConfig(uid, env, u);
+async function cb_conv_toggle_landing(env, uid, cid, mid, u, d, q) {
+  u._landing = !u._landing;
     const formats = u._isGost && (!u._lastProxies || u._lastProxies.length === 0)
       ? FORMAT_OPTIONS.filter(f => GOST_FORMATS.includes(f.id)) : null;
     return tg('editMessageReplyMarkup', env.BOT_TOKEN, {
       chat_id: cid, message_id: mid,
       reply_markup: fmtKb(formats, u._convTtl, u.ttl, u),
     });
-  }
+}
 
-  if (d === 'conv_back') {
-    const isGost = u._isGost && (!u._lastProxies || u._lastProxies.length === 0);
+async function cb_conv_back(env, uid, cid, mid, u, d, q) {
+  const isGost = u._isGost && (!u._lastProxies || u._lastProxies.length === 0);
     const formats = isGost ? FORMAT_OPTIONS.filter(f => GOST_FORMATS.includes(f.id)) : null;
     return tg('editMessageText', env.BOT_TOKEN, {
       chat_id: cid,
@@ -1755,14 +1768,12 @@ async function onCb(q, env) {
       parse_mode: 'HTML',
       reply_markup: fmtKb(formats, u._convTtl, u.ttl, u),
     });
-  }
+}
 
-  // ====== 本次时限（格式选择页） ======
-
-  if (d === 'conv_limit_menu') {
-    const effConvTtl = u._convTtl !== undefined ? u._convTtl : (u.ttl || 0);
+async function cb_conv_limit_menu(env, uid, cid, mid, u, d, q) {
+  const effConvTtl = u._convTtl !== undefined ? u._convTtl : (u.ttl || 0);
     const ttlLabel = effConvTtl === 0 ? '\u6C38\u4E0D\u8FC7\u671F' : effConvTtl < 3600 ? Math.round(effConvTtl / 60) + '\u5206\u949F' : Math.round(effConvTtl / 3600) + '\u5C0F\u65F6';
-    const effConvAcc = u._accessLimit !== undefined ? u._accessLimit : 0;
+    const effConvAcc = u._convAccessLimit != null ? u._convAccessLimit : (u._accessLimit != null ? u._accessLimit : 0);
     const accLabel = effConvAcc === 0 ? '\u4E0D\u9650' : effConvAcc + ' IP';
     return tg('editMessageText', env.BOT_TOKEN, {
       chat_id: cid,
@@ -1777,22 +1788,21 @@ async function onCb(q, env) {
         ],
       },
     });
-  }
+}
 
-  if (d === 'conv_ttl_menu') {
-    return tg('editMessageText', env.BOT_TOKEN, {
+async function cb_conv_ttl_menu(env, uid, cid, mid, u, d, q) {
+  return tg('editMessageText', env.BOT_TOKEN, {
       chat_id: cid,
       message_id: mid,
       text: '\u23F1 <b>\u8BBE\u7F6E\u5F53\u524D\u8F6C\u6362\u7684\u6642\u6548</b>\n\n\u4EC5\u5F71\u54CD\u672C\u6B21\u8F6C\u6362\u3002',
       parse_mode: 'HTML',
       reply_markup: ttlKb(u._convTtl !== undefined ? u._convTtl : (u.ttl || 0), 'conv_ttl_set:', 'conv_limit_menu'),
     });
-  }
+}
 
-  if (d.startsWith('conv_ttl_set:')) {
-    const ttlVal = parseInt(d.split(':')[1]);
+async function cb_conv_ttl_set(env, uid, cid, mid, u, d, q) {
+  const ttlVal = parseInt(d.split(':')[1]);
     u._convTtl = ttlVal;
-    saveUserConfig(uid, env, u);
     const isGost = u._isGost && (!u._lastProxies || u._lastProxies.length === 0);
     const formats = isGost ? FORMAT_OPTIONS.filter(f => GOST_FORMATS.includes(f.id)) : null;
     return tg('editMessageText', env.BOT_TOKEN, {
@@ -1802,10 +1812,10 @@ async function onCb(q, env) {
       parse_mode: 'HTML',
       reply_markup: fmtKb(formats, u._convTtl, u.ttl, u),
     });
-  }
+}
 
-  if (d === 'conv_acc_menu') {
-    const current = u._accessLimit !== undefined ? u._accessLimit : 0;
+async function cb_conv_acc_menu(env, uid, cid, mid, u, d, q) {
+  const current = u._convAccessLimit != null ? u._convAccessLimit : (u._accessLimit != null ? u._accessLimit : 0);
     return tg('editMessageText', env.BOT_TOKEN, {
       chat_id: cid,
       message_id: mid,
@@ -1813,12 +1823,11 @@ async function onCb(q, env) {
       parse_mode: 'HTML',
       reply_markup: accKb(current, 'conv_acc_set:', 'conv_limit_menu'),
     });
-  }
+}
 
-  if (d.startsWith('conv_acc_set:')) {
-    const accVal = parseInt(d.split(':')[1]);
-    u._accessLimit = accVal;
-    saveUserConfig(uid, env, u);
+async function cb_conv_acc_set(env, uid, cid, mid, u, d, q) {
+  const accVal = parseInt(d.split(':')[1]);
+    u._convAccessLimit = accVal;
     const isGost = u._isGost && (!u._lastProxies || u._lastProxies.length === 0);
     const formats = isGost ? FORMAT_OPTIONS.filter(f => GOST_FORMATS.includes(f.id)) : null;
     return tg('editMessageText', env.BOT_TOKEN, {
@@ -1828,12 +1837,10 @@ async function onCb(q, env) {
       parse_mode: 'HTML',
       reply_markup: fmtKb(formats, u._convTtl, u.ttl, u),
     });
-  }
+}
 
-  // ====== 格式转换 ======
-
-  if (d.startsWith('conv_fmt:')) {
-    const fmt = d.split(':')[1];
+async function cb_conv_fmt(env, uid, cid, mid, u, d, q) {
+  const fmt = d.split(':')[1];
     const fmtLabel = FORMAT_OPTIONS.find((f) => f.id === fmt)?.label || fmt;
 
     // 纯 Gost（无标准节点）：直接输出原始内容
@@ -1860,7 +1867,7 @@ async function onCb(q, env) {
         const effTtl = getEffectiveTtl(u);
         const effAcc = getEffectiveMaxAccess(u);
         u._convTtl = null;
-        u._accessLimit = null;
+        u._convAccessLimit = null;
         const ttlT = effTtl === 0 ? '\u6C38\u4E0D\u8FC7\u671F' : effTtl < 3600 ? Math.round(effTtl / 60) + '\u5206\u949F' : Math.round(effTtl / 3600) + '\u5C0F\u65F6';
         const accT = effAcc === 0 ? '' : '\n\u{1F4CA} ' + effAcc + ' IP';
         await tg('editMessageText', env.BOT_TOKEN, {
@@ -1991,7 +1998,7 @@ async function onCb(q, env) {
       const effTtl2 = getEffectiveTtl(u);
       const effAcc = getEffectiveMaxAccess(u);
       u._convTtl = null;
-      u._accessLimit = null;
+      u._convAccessLimit = null;
       const ttlT = effTtl2 === 0 ? '\u6C38\u4E0D\u8FC7\u671F' : effTtl2 < 3600 ? Math.round(effTtl2 / 60) + '\u5206\u949F' : Math.round(effTtl2 / 3600) + '\u5C0F\u65F6';
       const accT = effAcc === 0 ? '' : '\n\u{1F4CA} ' + effAcc + ' IP';
       let resText = '\u2705 <b>\u8F6C\u6362\u5B8C\u6210</b>\n\n\u{1F4CA} ' + u._lastProxies.length + ' \u8282\u70B9 \u2192 <b>' + fmtLabel + '</b>\n\n\u{1F517} <code>' + clipUrl + '</code>\n';
@@ -2012,8 +2019,9 @@ async function onCb(q, env) {
       });
     }
     return;
-  }
 }
+
+
 
   // ==================== Worker 入口 ====================
 
