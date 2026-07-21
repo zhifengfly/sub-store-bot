@@ -80,7 +80,9 @@ function parseProxiesWithSurge(text, skipSurge) {
     const { proxies: surge } = parseSurgeLines(text);
     if (surge.length > 0) return surge;
   }
+  // parseClashYaml 优先（快 20-30 倍，CF Workers 10s 限制必须）
   try { const y = parseClashYaml(text); if (y.length > 0) return y; } catch {}
+  // ProxyUtils.parse 兜底（慢但全，处理非 YAML 格式）
   try { const r = ProxyUtils.parse(text); if (r && r.length > 0) return r; } catch {}
   return [];
 }
@@ -114,17 +116,42 @@ function parseClashYaml(text) {
         case 'uuid': proxy.uuid = v; break;
         case 'sni': proxy.sni = v; break;
         case 'network': proxy.network = v; break;
-        case 'tls': proxy.tls = v === 'true'; break;
         case 'flow': proxy.flow = v; break;
         case 'alpn': proxy.alpn = typeof v === 'string' ? v.split(',').map(s => s.trim().replace(/^['"](.*)['"]$/, '$1')) : v; break;
         case 'client-fingerprint': proxy['client-fingerprint'] = v; break;
         case 'servername': proxy.servername = v; break;
         case 'skip-cert-verify': proxy['skip-cert-verify'] = v === 'true' || v === true; break;
         case 'udp': proxy.udp = v === 'true' || v === true; break;
-        default: proxy[k] = v; break;
+        case 'tfo': proxy.tfo = v === 'true' || v === true; break;
+        case 'tls': proxy.tls = v === 'true' || v === true; break;
+        case 'reality': proxy.reality = v === 'true' || v === true; break;
+        default:
+          // 将 YAML 布尔值字符串转为 JS 布尔
+          if (v === 'true') proxy[k] = true;
+          else if (v === 'false') proxy[k] = false;
+          else proxy[k] = v;
+          break;
       }
     }
-    if (proxy.type) proxies.push(proxy);
+    if (proxy.type) {
+      // 类 GA 归一化：补充引擎 produce 所需的隐式字段
+      if (!proxy.network && ['trojan','vless','vmess'].includes(proxy.type)) proxy.network = 'tcp';
+      if (['trojan','anytls','hysteria2','tuic','juicity','naive','trusttunnel'].includes(proxy.type)) {
+        if (proxy.tls === undefined) proxy.tls = true;
+      }
+      if (proxy.tls) {
+        proxy.sni ||= proxy.servername || proxy.server;
+      }
+      if (proxy.type === 'vmess') { proxy.cipher ||= 'none'; proxy.alterId ??= 0; }
+      // 嵌套结构未解析成功时，降级 transport 避免引擎产空对象
+      if (proxy.network && !['tcp','udp'].includes(proxy.network)) {
+        const req = { ws: 'ws-opts', h2: 'h2-opts', http: 'http-opts', grpc: 'grpc-opts' }[proxy.network];
+        if (req && (!proxy[req] || proxy[req] === '')) {
+          proxy.network = 'tcp';
+        }
+      }
+      proxies.push(proxy);
+    }
   }
   return proxies;
 }
@@ -233,6 +260,7 @@ const FORMAT_OPTIONS = [
   { id: 'stash', label: 'Stash' },
   { id: 'egern', label: 'Egern' },
   { id: 'b64', label: 'Base64' },
+  { id: 'native', label: '原生 YAML' },
 ];
 
 // Gost Tunnel 仅支持的格式
@@ -1495,7 +1523,7 @@ async function cb_collection_process(env, uid, cid, mid, u, d, q) {
     const typeStr = Object.entries(types).sort((a,b) => b[1]-a[1]).map(([t,c]) => t + ': ' + c).join(', ');
     const text = '\u{1F504} \u68C0\u6D4B\u5230\u8BA2\u9605\u5185\u5BB9\n\n\u{1F4CA} \u8282\u70B9\u6570: ' + mergedStd.length + '\u3001\u53BB\u91CD: ' + dedup +
       '\n\n\u{1F4CD} ' + typeStr + '\n\n\u8BF7\u9009\u62E9\u8F93\u51FA\u683C\u5F0F:';
-    const formats = mergedStd.some(p => ['ss','ssr','trojan'].includes(p.type)) ? FORMAT_OPTIONS.filter(f => ['egern','stash'].includes(f.id) ? false : true) : FORMAT_OPTIONS;
+    const formats = FORMAT_OPTIONS;
     return tg('editMessageText', env.BOT_TOKEN, {
       chat_id: cid, message_id: mid, text, parse_mode: 'HTML',
       reply_markup: fmtKb(formats, u._convTtl, u.ttl, u),
@@ -2152,7 +2180,59 @@ async function cb_conv_fmt(env, uid, cid, mid, u, d, q) {
         rawText = btoa(unescape(encodeURIComponent([std, wgOut, gostRaw].filter(Boolean).join('\n'))));
       }
       output = rawText;
+    } else if (fmt === 'native') {
+      // 原生 Clash YAML（块格式），处理 Sub 引擎解析不了的畸形节点
+      output = 'proxies:\n' + proxiesForConvert.map(p => {
+        const order = ['name','type','server','port','password','uuid','cipher','network','tls','sni','skip-cert-verify','flow','udp','alpn','client-fingerprint','servername','grpc-opts','ws-opts','reality-opts'];
+        const seen = new Set();
+        const lines = [];
+        let isFirst = true;
+        const wl = (indent, k, v) => {
+          if (isFirst) { lines.push('  - ' + k + ': ' + v); isFirst = false; }
+          else lines.push(' '.repeat(indent) + k + ': ' + v);
+        };
+        for (const k of order) {
+          if (p[k] === undefined || p[k] === null) continue;
+          seen.add(k);
+          const v = p[k];
+          if (typeof v === 'boolean') wl(4, k, v);
+          else if (typeof v === 'number') wl(4, k, v);
+          else if (typeof v === 'string') {
+            const needsQuote = /[:#\[\]{},&*!|>'"%@` ]/.test(v) || v === '';
+            if (needsQuote) wl(4, k, '"' + v.replace(/\\/g,'\\\\').replace(/"/g,'\\"') + '"');
+            else wl(4, k, v);
+          } else if (typeof v === 'object') {
+            wl(4, k, '');
+            for (const [sk, sv] of Object.entries(v)) {
+              if (sv === undefined || sv === null) continue;
+              if (typeof sv === 'object' && !Array.isArray(sv)) {
+                lines.push('      ' + sk + ':');
+                for (const [tk, tv] of Object.entries(sv)) {
+                  if (tv !== undefined && tv !== null) {
+                    const nq = typeof tv === 'string' && (tv.includes(':') || tv.includes('#') || tv.includes('"') || tv.includes(' '));
+                    lines.push('        ' + tk + ': ' + (nq ? '"' + tv.replace(/"/g,'\\"') + '"' : String(tv)));
+                  }
+                }
+              } else {
+                const nq = typeof sv === 'string' && (sv.includes(':') || sv.includes('#'));
+                lines.push('      ' + sk + ': ' + (nq ? '"' + sv.replace(/"/g,'\\"') + '"' : String(sv)));
+              }
+            }
+          }
+        }
+        // 有序字段中没出现的其他字段
+        for (const k of Object.keys(p)) {
+          if (seen.has(k)) continue;
+          const v = p[k];
+          if (v === undefined || v === null || k.startsWith('_')) continue;
+          if (typeof v === 'boolean') wl(4, k, v);
+          else if (typeof v === 'string') wl(4, k, '"' + String(v).replace(/"/g,'\\"') + '"');
+          else wl(4, k, String(v));
+        }
+        return lines.join('\n');
+      }).join('\n');
     } else {
+      // 其他格式 → Sub 引擎
       try {
         output = ProxyUtils.produce(proxiesForConvert, fmt);
       } catch (e) {
