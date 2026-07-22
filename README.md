@@ -47,7 +47,7 @@ Telegram Bot — 订阅转换 + 短链分享，内置完整 Sub-Store 引擎。
    - `CF_API_TOKEN` — CF API Token
 5. 去 **Actions** 页面 → 点 **Fork Sync** → **Run workflow** → 等小圆点变绿
 
-#### 方式二：自动同步 + 部署（[@CrzThursday_VMe50](https://github.com/CrzThursday-VMe50) 投稿）
+#### 方式二：自动同步 + 部署（TG 群友 @CrzThursday_VMe50 投稿）
 
 每日自动同步上游代码并部署，无需手动操作。所有变量全部放 **Git Secrets**，不要放 Variable。
 
