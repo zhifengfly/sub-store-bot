@@ -37,17 +37,20 @@ Telegram Bot — 订阅转换 + 短链分享，内置完整 Sub-Store 引擎。
 
 ### 同步更新推送
 
-以后此仓库更新（应该是不会了）了，想自动更新同步拉取可以按以下步骤：
+由 [@CrzThursday_VMe50](https://github.com/CrzThursday-VMe50) 投稿的自动化工作流，每日自动同步上游并部署。
 
-1. 打开你的 GitHub 仓库
-2. **Add file → Create new file**
-3. 路径填  `.github/workflows/fork-sync.yml`  → 把 [_workflows](docs/_workflows/fork-sync.yml) 的内容粘贴进你新建的yml文件  → **Commit**
-4. 点 **More** → **Settings** → **Secrets and variables** → **Actions** → **New repository secret** 添加两个变量：
-   - Name： `CF_ACCOUNT_ID`
-   - Secret： 你的CFID，如登录cf后打开主页地址栏https://dash.cloudflare.com/你的CFID就是这串/home
-   - Name： `CF_API_TOKEN`
-   - Secret： 你的CF操作令牌。CF首页点左上角三杠最下面 **管理账户** → **账户API令牌** 创建一个
-5. 去 **Actions** 页面 → 轻点 **Allworkers** → 点 **Fork Sync** → 猛击 **Run workflow** → 小圆点变绿自动部署激活
+1. 把 [fork-sync-deploy.yml](fork-sync-deploy.yml) 复制到你仓库的 `.github/workflows/` 目录
+2. 去 **Settings → Secrets and variables → Actions → New repository secret**，添加以下变量（**全部放 Secret，不要放 Variable**）：
+   - `CF_ACCOUNT_ID` — 你的 CF 账户 ID
+   - `CF_API_TOKEN` — CF API Token
+   - `BOT_TOKEN` — Telegram Bot Token
+   - `CLIP_URL` — 你的 Worker 域名
+   - `ALLOWED_USERS` — 白名单 ID（可选）
+   - `WEBHOOK_SECRET` — Webhook 密钥（可选）
+   - `PROXY_URL` — 反代地址（可选）
+   - `LANDING_HTML_URL` — 自定义落地页地址（可选）
+3. 去 **Settings → Actions → General → Workflow permissions**，勾选 **Read and write permissions**
+4. 工作流每天北京时间 06:00 自动运行，也可手动触发
 
 ## 环境变量
 
