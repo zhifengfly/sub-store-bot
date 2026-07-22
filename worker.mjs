@@ -1228,16 +1228,23 @@ async function onMsg(msg, env) {
     const ttlRow = isDead
       ? [{ text: '\u26AB \u5DF2\u6D88\u8017/\u8FC7\u671F', callback_data: 'noop' }]
       : [{ text: '\u23F1 \u4FEE\u6539\u6642\u6548', callback_data: 'mod_ttl_' + l.id }];
+    const accRow = isDead
+      ? []
+      : [{ text: '\u{1F4CA} \u4FEE\u6539\u6B21\u6570', callback_data: 'mod_acc_' + l.id }];
     const rows = [
-      [{ text: '\u{1F4E4} \u5206\u4EAB', url: 'https://t.me/share/url?url=' + encodeURIComponent(clipUrl) }],
-      [{ text: '\u{1F4DD} \u5907\u6CE8', callback_data: 'rename_' + l.id }],
-      ttlRow,
+      [
+        { text: '\u{1F4E4} \u5206\u4EAB', url: 'https://t.me/share/url?url=' + encodeURIComponent(clipUrl) },
+        { text: '\u{1F4DD} \u5907\u6CE8', callback_data: 'rename_' + l.id },
+      ],
+      [
+        ttlRow[0],
+        ...(accRow.length ? [accRow[0]] : []),
+      ],
+      [
+        { text: '\u{1F5D1} \u5220\u9664\u77ED\u94FE', callback_data: 'del_confirm_' + l.id },
+        { text: '\u2190 \u8FD4\u56DE\u5217\u8868', callback_data: 'my_links_0' },
+      ],
     ];
-    if (!isDead) rows.push([{ text: '\u{1F4CA} \u4FEE\u6539\u6B21\u6570', callback_data: 'mod_acc_' + l.id }]);
-    rows.push(
-      [{ text: '\u{1F5D1} \u5220\u9664\u77ED\u94FE', callback_data: 'del_confirm_' + l.id }],
-      [{ text: '\u2190 \u8FD4\u56DE\u5217\u8868', callback_data: 'my_links_0' }],
-    );
     return tg('sendMessage', env.BOT_TOKEN, {
       chat_id: cid,
       text: text,
@@ -1693,16 +1700,24 @@ async function cb_link(env, uid, cid, mid, u, d, q) {
       ? [{ text: '\u26AB \u5DF2\u6D88\u8017/\u8FC7\u671F', callback_data: 'noop' }]
       : [{ text: '\u23F1 \u4FEE\u6539\u6642\u6548', callback_data: 'mod_ttl_' + l.id }];
 
+    const accRow = isDead
+      ? []
+      : [{ text: '\u{1F4CA} \u4FEE\u6539\u6B21\u6570', callback_data: 'mod_acc_' + l.id }];
+
     const rows = [
-      [{ text: '\u{1F4E4} \u5206\u4EAB', url: 'https://t.me/share/url?url=' + encodeURIComponent(clipUrl) }],
-      [{ text: '\u{1F4DD} \u5907\u6CE8', callback_data: 'rename_' + l.id }],
-      ttlRow,
+      [
+        { text: '\u{1F4E4} \u5206\u4EAB', url: 'https://t.me/share/url?url=' + encodeURIComponent(clipUrl) },
+        { text: '\u{1F4DD} \u5907\u6CE8', callback_data: 'rename_' + l.id },
+      ],
+      [
+        ttlRow[0],
+        ...(accRow.length ? [accRow[0]] : []),
+      ],
+      [
+        { text: '\u{1F5D1} \u5220\u9664\u77ED\u94FE', callback_data: 'del_confirm_' + l.id },
+        { text: '\u2190 \u8FD4\u56DE\u5217\u8868', callback_data: 'my_links_0' },
+      ],
     ];
-    if (!isDead) rows.push([{ text: '\u{1F4CA} \u4FEE\u6539\u6B21\u6570', callback_data: 'mod_acc_' + l.id }]);
-    rows.push(
-      [{ text: '\u{1F5D1} \u5220\u9664\u77ED\u94FE', callback_data: 'del_confirm_' + l.id }],
-      [{ text: '\u2190 \u8FD4\u56DE\u5217\u8868', callback_data: 'my_links_0' }],
-    );
     return tg('editMessageText', env.BOT_TOKEN, {
       chat_id: cid,
       message_id: mid,
@@ -1909,16 +1924,23 @@ async function cb_do_rename(env, uid, cid, mid, u, d, q) {
   const ttlRow = isDead
     ? [{ text: '\u26AB \u5DF2\u6D88\u8017/\u8FC7\u671F', callback_data: 'noop' }]
     : [{ text: '\u23F1 \u4FEE\u6539\u6642\u6548', callback_data: 'mod_ttl_' + l.id }];
+  const accRow = isDead
+    ? []
+    : [{ text: '\u{1F4CA} \u4FEE\u6539\u6B21\u6570', callback_data: 'mod_acc_' + l.id }];
   const rows = [
-    [{ text: '\u{1F4E4} \u5206\u4EAB', url: 'https://t.me/share/url?url=' + encodeURIComponent(clipUrl) }],
-    [{ text: '\u{1F4DD} \u5907\u6CE8', callback_data: 'rename_' + l.id }],
-    ttlRow,
+    [
+      { text: '\u{1F4E4} \u5206\u4EAB', url: 'https://t.me/share/url?url=' + encodeURIComponent(clipUrl) },
+      { text: '\u{1F4DD} \u5907\u6CE8', callback_data: 'rename_' + l.id },
+    ],
+    [
+      ttlRow[0],
+      ...(accRow.length ? [accRow[0]] : []),
+    ],
+    [
+      { text: '\u{1F5D1} \u5220\u9664\u77ED\u94FE', callback_data: 'del_confirm_' + l.id },
+      { text: '\u2190 \u8FD4\u56DE\u5217\u8868', callback_data: 'my_links_0' },
+    ],
   ];
-  if (!isDead) rows.push([{ text: '\u{1F4CA} \u4FEE\u6539\u6B21\u6570', callback_data: 'mod_acc_' + l.id }]);
-  rows.push(
-    [{ text: '\u{1F5D1} \u5220\u9664\u77ED\u94FE', callback_data: 'del_confirm_' + l.id }],
-    [{ text: '\u2190 \u8FD4\u56DE\u5217\u8868', callback_data: 'my_links_0' }],
-  );
   return tg('editMessageText', env.BOT_TOKEN, {
     chat_id: cid,
     message_id: mid,
