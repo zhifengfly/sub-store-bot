@@ -1165,28 +1165,23 @@ async function onMsg(msg, env) {
   if (u.state && u.state.startsWith('RENAME_')) {
     const linkId = u.state.replace('RENAME_', '');
     const remark = (msg.text || '').trim();
+    const pCid = u.promptCid, pMid = u.promptMid;
     u.state = null;
+    const edit = (text, kb) => pCid && pMid
+      ? tg('editMessageText', env.BOT_TOKEN, { chat_id: pCid, message_id: pMid, text, parse_mode: 'HTML', reply_markup: kb })
+      : tg('sendMessage', env.BOT_TOKEN, { chat_id: cid, text, parse_mode: 'HTML', reply_markup: kb });
     if (remark === '/cancel' || !remark) {
-      return tg('sendMessage', env.BOT_TOKEN, {
-        chat_id: cid, text: '\u2716 \u5DF2\u53D6\u6D88',
-        reply_markup: { inline_keyboard: [[{ text: '\u2190 \u8FD4\u56DE\u5217\u8868', callback_data: 'my_links_0' }]] },
-      });
+      return edit('\u2716 \u5DF2\u53D6\u6D88', { inline_keyboard: [[{ text: '\u2190 \u8FD4\u56DE\u5217\u8868', callback_data: 'my_links_0' }]] });
     }
     const links = await getUserLinks(uid, env);
     const l = links.find(x => x.id === linkId);
-    if (!l) {
-      return tg('sendMessage', env.BOT_TOKEN, {
-        chat_id: cid, text: '\u274C \u77ED\u94FE\u5DF2\u4E0D\u5B58\u5728',
-        reply_markup: mainKb(),
-      });
-    }
+    if (!l) return edit('\u274C \u77ED\u94FE\u5DF2\u4E0D\u5B58\u5728', mainKb());
     l.preview = remark;
     await env.KV.put('ulinks:' + uid, JSON.stringify(links));
-    return tg('sendMessage', env.BOT_TOKEN, {
-      chat_id: cid,
-      text: '\u2705 \u5DF2\u66F4\u65B0\u5217\u8868\u540D\u79F0\uFF1A' + escapeHTML(remark),
-      reply_markup: { inline_keyboard: [[{ text: '\u2190 \u8FD4\u56DE\u5217\u8868', callback_data: 'my_links_0' }]] },
-    });
+    // 重新显示详情页
+    const clipUrl = ((env.CLIP_URL || '').replace(/\/+$/, '')) + '/share/' + l.id;
+    const text = '\u2705 \u5DF2\u66F4\u65B0\u540D\u79F0\uFF1A' + escapeHTML(remark) + '\n\n' + linkStatusIcon(l) + ' <b>' + escapeHTML(l.preview) + '</b>\n\u{1F517} <code>' + escapeHTML(clipUrl) + '</code>';
+    return edit(text, { inline_keyboard: [[{ text: '\u2190 \u8FD4\u56DE\u5217\u8868', callback_data: 'my_links_0' }]] });
   }
 
   // 获取输入内容
@@ -1325,6 +1320,8 @@ async function onCb(q, env) {
   if (d.startsWith('rename_')) {
     const linkId = d.replace('rename_', '');
     u.state = 'RENAME_' + linkId;
+    u.promptCid = cid;
+    u.promptMid = mid;
     return tg('editMessageText', env.BOT_TOKEN, {
       chat_id: cid, message_id: mid,
       text: '\u{1F4DD} <b>\u4FEE\u6539\u5217\u8868\u540D\u79F0</b>\n\n\u53D1\u9001\u65B0\u540D\u79F0\uFF0C\u6216\u53D1\u9001 /cancel \u53D6\u6D88\u3002',
