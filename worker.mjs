@@ -394,6 +394,30 @@ function backKb() {
   return { inline_keyboard: [[{ text: '\u2190 返回', callback_data: 'menu' }]] };
 }
 
+// ===== 通用消息工具 =====
+// 回调场景：直接编辑原消息
+async function editMsg(env, cid, mid, text, kb) {
+  return tg('editMessageText', env.BOT_TOKEN, {
+    chat_id: cid, message_id: mid, text, parse_mode: 'HTML',
+    reply_markup: kb || backKb(),
+  });
+}
+// 文本输入场景：优先编辑主页消息，失败则发新消息
+async function replyMsg(env, uid, cid, text, kb) {
+  const u = getState(uid);
+  if (u.promptCid && u.promptMid) {
+    const ok = await tg('editMessageText', env.BOT_TOKEN, {
+      chat_id: u.promptCid, message_id: u.promptMid, text, parse_mode: 'HTML',
+      reply_markup: kb || backKb(),
+    }).catch(() => null);
+    if (ok && ok.ok !== false) return ok;
+  }
+  return tg('sendMessage', env.BOT_TOKEN, {
+    chat_id: cid, text, parse_mode: 'HTML',
+    reply_markup: kb || backKb(),
+  });
+}
+
 function resultKb(url) {
   return {
     inline_keyboard: [
@@ -1165,23 +1189,18 @@ async function onMsg(msg, env) {
   if (u.state && u.state.startsWith('RENAME_')) {
     const linkId = u.state.replace('RENAME_', '');
     const remark = (msg.text || '').trim();
-    const pCid = u.promptCid, pMid = u.promptMid;
     u.state = null;
-    const edit = (text, kb) => pCid && pMid
-      ? tg('editMessageText', env.BOT_TOKEN, { chat_id: pCid, message_id: pMid, text, parse_mode: 'HTML', reply_markup: kb })
-      : tg('sendMessage', env.BOT_TOKEN, { chat_id: cid, text, parse_mode: 'HTML', reply_markup: kb });
     if (remark === '/cancel' || !remark) {
-      return edit('\u2716 \u5DF2\u53D6\u6D88', { inline_keyboard: [[{ text: '\u2190 \u8FD4\u56DE\u5217\u8868', callback_data: 'my_links_0' }]] });
+      return replyMsg(env, uid, cid, '\u2716 \u5DF2\u53D6\u6D88', { inline_keyboard: [[{ text: '\u2190 \u8FD4\u56DE\u5217\u8868', callback_data: 'my_links_0' }]] });
     }
     const links = await getUserLinks(uid, env);
     const l = links.find(x => x.id === linkId);
-    if (!l) return edit('\u274C \u77ED\u94FE\u5DF2\u4E0D\u5B58\u5728', mainKb());
+    if (!l) return replyMsg(env, uid, cid, '\u274C \u77ED\u94FE\u5DF2\u4E0D\u5B58\u5728');
     l.preview = remark;
     await env.KV.put('ulinks:' + uid, JSON.stringify(links));
-    // 重新显示详情页
     const clipUrl = ((env.CLIP_URL || '').replace(/\/+$/, '')) + '/share/' + l.id;
     const text = '\u2705 \u5DF2\u66F4\u65B0\u540D\u79F0\uFF1A' + escapeHTML(remark) + '\n\n' + linkStatusIcon(l) + ' <b>' + escapeHTML(l.preview) + '</b>\n\u{1F517} <code>' + escapeHTML(clipUrl) + '</code>';
-    return edit(text, { inline_keyboard: [[{ text: '\u2190 \u8FD4\u56DE\u5217\u8868', callback_data: 'my_links_0' }]] });
+    return replyMsg(env, uid, cid, text, { inline_keyboard: [[{ text: '\u2190 \u8FD4\u56DE\u5217\u8868', callback_data: 'my_links_0' }]] });
   }
 
   // 获取输入内容
@@ -1269,20 +1288,7 @@ async function onMsg(msg, env) {
     '\u{1F4A1} \u5982\u9700\u89E3\u6790\u8BA2\u9605\uFF0C\u8BF7\u4F7F\u7528\u4E3B\u9875\u7684\u300C\u8BA2\u9605\u300D\u6309\u94AE\u5BFC\u5165\u8BA2\u9605\u94FE\u63A5';
 
   // 编辑主页消息显示结果，编辑失败则发送新消息
-  if (u.promptCid && u.promptMid) {
-    const edited = await tg('editMessageText', env.BOT_TOKEN, {
-      chat_id: u.promptCid, message_id: u.promptMid,
-      text: resultText, parse_mode: 'HTML',
-      reply_markup: backKb(),
-    }).catch(() => null);
-    if (edited && edited.ok !== false) return;
-  }
-  return tg('sendMessage', env.BOT_TOKEN, {
-    chat_id: cid,
-    text: resultText,
-    parse_mode: 'HTML',
-    reply_markup: backKb(),
-  });
+  return replyMsg(env, uid, cid, resultText);
 
 }
 
@@ -1322,12 +1328,10 @@ async function onCb(q, env) {
     u.state = 'RENAME_' + linkId;
     u.promptCid = cid;
     u.promptMid = mid;
-    return tg('editMessageText', env.BOT_TOKEN, {
-      chat_id: cid, message_id: mid,
-      text: '\u{1F4DD} <b>\u4FEE\u6539\u5217\u8868\u540D\u79F0</b>\n\n\u53D1\u9001\u65B0\u540D\u79F0\uFF0C\u6216\u53D1\u9001 /cancel \u53D6\u6D88\u3002',
-      parse_mode: 'HTML',
-      reply_markup: { inline_keyboard: [[{ text: '\u2716 \u53D6\u6D88', callback_data: 'link_' + linkId }]] },
-    });
+    return editMsg(env, cid, mid,
+      '\u{1F4DD} <b>\u4FEE\u6539\u5217\u8868\u540D\u79F0</b>\n\n\u53D1\u9001\u65B0\u540D\u79F0\uFF0C\u6216\u53D1\u9001 /cancel \u53D6\u6D88\u3002',
+      { inline_keyboard: [[{ text: '\u2716 \u53D6\u6D88', callback_data: 'link_' + linkId }]] },
+    );
   }
   if (d.startsWith('mod_acc_')) return cb_mod_acc(env, uid, cid, mid, u, d, q);
   if (d.startsWith('chg_acc_')) return cb_chg_acc(env, uid, cid, mid, u, d, q);
@@ -1401,7 +1405,7 @@ async function cb_collection_process(env, uid, cid, mid, u, d, q) {
       // ===== 远程订阅：直接调用 processRemoteUrls 拉取解析 =====
       const urls = items.filter(i => i.url).map(i => i.url);
       if (urls.length === 0) {
-        return tg('sendMessage', env.BOT_TOKEN, { chat_id: cid, text: '\u274C 没有有效的订阅链接', reply_markup: backKb() });
+        return editMsg(env, cid, mid, '\u274C 没有有效的订阅链接');
       }
       return processRemoteUrls(urls, cid, uid, u, env);
     }
@@ -1450,9 +1454,7 @@ async function cb_collection_process(env, uid, cid, mid, u, d, q) {
           reply_markup: fmtKb(null, null, null, u),
         });
       }
-      return tg('sendMessage', env.BOT_TOKEN, {
-        chat_id: cid, text: '\u274C 无法从收集的内容中解析出任何节点', reply_markup: backKb(),
-      });
+      return editMsg(env, cid, mid, '\u274C 无法从收集的内容中解析出任何节点');
     }
     // 去重
     const mergedStd = deduplicateProxies(proxies);
@@ -1465,9 +1467,7 @@ async function cb_collection_process(env, uid, cid, mid, u, d, q) {
     }
     // 显示格式选择
     if (mergedStd.length === 0) {
-      return tg('sendMessage', env.BOT_TOKEN, {
-        chat_id: cid, text: '\u274C \u89E3\u6790\u540E\u6CA1\u6709\u8282\u70B9', reply_markup: backKb(),
-      });
+      return editMsg(env, cid, mid, '\u274C \u89E3\u6790\u540E\u6CA1\u6709\u8282\u70B9');
     }
     const types = {};
     for (const p of mergedStd) types[p.type] = (types[p.type] || 0) + 1;
