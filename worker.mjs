@@ -1161,97 +1161,7 @@ async function onMsg(msg, env) {
     });
   }
 
-  // 备注模式
-  if (u.state && u.state.startsWith('RENAME_')) {
-    const linkId = u.state.replace('RENAME_', '');
-    const remark = (msg.text || '').trim();
-    if (remark === '/cancel') {
-      u.state = null;
-      return tg('sendMessage', env.BOT_TOKEN, {
-        chat_id: cid,
-        text: '\u2716 \u5DF2\u53D6\u6D88',
-        parse_mode: 'HTML',
-        reply_markup: { inline_keyboard: [[{ text: '\u2190 \u8FD4\u56DE\u5217\u8868', callback_data: 'my_links_0' }]] },
-      });
-    }
-    const links = await getUserLinks(uid, env);
-    const l = links.find(x => x.id === linkId);
-    if (!l) {
-      u.state = null;
-      return tg('sendMessage', env.BOT_TOKEN, {
-        chat_id: cid,
-        text: '\u274C \u77ED\u94FE\u5DF2\u4E0D\u5B58\u5728',
-        reply_markup: mainKb(),
-      });
-    }
-    l.remark = remark || '';
-    await env.KV.put('ulinks:' + uid, JSON.stringify(links));
-    u.state = null;
-    // 重新显示详情页
-    const clipUrl = ((env.CLIP_URL || '').replace(/\/+$/, '')) + '/share/' + l.id;
-    let kvAlive = false, accessedCount = 0, accessedLimit = l.maxAccess || 0;
-    try {
-      const raw = await env.KV.get('share_' + l.id, { type: 'json' });
-      if (raw) {
-        kvAlive = true;
-        accessedCount = Array.isArray(raw.accessedIPs) ? raw.accessedIPs.length : 0;
-        accessedLimit = raw.maxAccess || l.maxAccess || 0;
-      }
-    } catch {}
-    const isConsumed = !kvAlive && (l.maxAccess > 0 || l.burn);
-    const isExpired = l.ttl > 0 && l.expiresAt && Date.now() > l.expiresAt;
-    const isDead = isExpired || isConsumed || (!kvAlive && l.ttl > 0);
-    let statusIcon, statusText;
-    if (isDead) {
-      statusIcon = '\u26AB';
-      statusText = isConsumed ? '\u26AB \u5DF2\u6D88\u8017' : '\u26AB \u5DF2\u8FC7\u671F';
-    } else if (l.ttl === 0) {
-      statusIcon = '\u{1F535}';
-      statusText = '\u{1F535} \u6C38\u4E45\u6709\u6548';
-    } else if (l.burn) {
-      statusIcon = '\u{1F525}';
-      statusText = '\u{1F525} \u9605\u540E\u5373\u711A';
-    } else {
-      statusIcon = '\u{1F7E0}';
-      statusText = formatRemaining(l.expiresAt);
-    }
-    let text = '\u{1F4CB} <b>\u77ED\u94FE\u8BE6\u60C5</b>\n\n';
-    text += statusIcon + ' <b>' + escapeHTML(l.preview) + '</b>\n';
-    if (l.remark) text += '\u{1F4DD} \u5907\u6CE8: ' + escapeHTML(l.remark) + '\n';
-    text += '\u{1F4CA} ' + (l.nodeCount || 0) + ' \u8282\u70B9  \u00B7 ' + statusText + '\n';
-    if (kvAlive) {
-      text += '\u{1F4F1} \u8BBF\u95EE: ' + accessedCount + ' \u8BBE\u5907';
-      if (accessedLimit > 0) text += ' / ' + accessedLimit + ' IP';
-      text += '\n';
-    }
-    text += '\n\u{1F517} <code>' + escapeHTML(clipUrl) + '</code>';
-    const ttlRow = isDead
-      ? [{ text: '\u26AB \u5DF2\u6D88\u8017/\u8FC7\u671F', callback_data: 'noop' }]
-      : [{ text: '\u23F1 \u4FEE\u6539\u6642\u6548', callback_data: 'mod_ttl_' + l.id }];
-    const accRow = isDead
-      ? []
-      : [{ text: '\u{1F4CA} \u4FEE\u6539\u6B21\u6570', callback_data: 'mod_acc_' + l.id }];
-    const rows = [
-      [
-        { text: '\u{1F4E4} \u5206\u4EAB', url: 'https://t.me/share/url?url=' + encodeURIComponent(clipUrl) },
-        { text: '\u{1F4DD} \u5907\u6CE8', callback_data: 'rename_' + l.id },
-      ],
-      [
-        ttlRow[0],
-        ...(accRow.length ? [accRow[0]] : []),
-      ],
-      [
-        { text: '\u{1F5D1} \u5220\u9664\u77ED\u94FE', callback_data: 'del_confirm_' + l.id },
-        { text: '\u2190 \u8FD4\u56DE\u5217\u8868', callback_data: 'my_links_0' },
-      ],
-    ];
-    return tg('sendMessage', env.BOT_TOKEN, {
-      chat_id: cid,
-      text: text,
-      parse_mode: 'HTML',
-      reply_markup: { inline_keyboard: rows },
-    });
-  }
+
 
   // 获取输入内容
   let content = '';
@@ -1337,16 +1247,15 @@ async function onMsg(msg, env) {
     '\u23F1 ' + ttlT + accT + '\n\n' +
     '\u{1F4A1} \u5982\u9700\u89E3\u6790\u8BA2\u9605\uFF0C\u8BF7\u4F7F\u7528\u4E3B\u9875\u7684\u300C\u8BA2\u9605\u300D\u6309\u94AE\u5BFC\u5165\u8BA2\u9605\u94FE\u63A5';
 
-  // 编辑主页消息显示结果
+  // 编辑主页消息显示结果，编辑失败则发送新消息
   if (u.promptCid && u.promptMid) {
-    await tg('editMessageText', env.BOT_TOKEN, {
+    const edited = await tg('editMessageText', env.BOT_TOKEN, {
       chat_id: u.promptCid, message_id: u.promptMid,
       text: resultText, parse_mode: 'HTML',
       reply_markup: backKb(),
-    }).catch(() => {});
+    }).catch(() => null);
+    if (edited && edited.ok !== false) return;
   }
-
-  // 同时发送一条新消息（确保用户看到）
   return tg('sendMessage', env.BOT_TOKEN, {
     chat_id: cid,
     text: resultText,
@@ -1387,8 +1296,6 @@ async function onCb(q, env) {
   if (d.startsWith('do_del_')) return cb_do_del(env, uid, cid, mid, u, d, q);
   if (d.startsWith('mod_ttl_')) return cb_mod_ttl(env, uid, cid, mid, u, d, q);
   if (d.startsWith('chg_ttl_')) return cb_chg_ttl(env, uid, cid, mid, u, d, q);
-  if (d.startsWith('rename_')) return cb_rename(env, uid, cid, mid, u, d, q);
-  if (d.startsWith('do_rename_')) return cb_do_rename(env, uid, cid, mid, u, d, q);
   if (d.startsWith('mod_acc_')) return cb_mod_acc(env, uid, cid, mid, u, d, q);
   if (d.startsWith('chg_acc_')) return cb_chg_acc(env, uid, cid, mid, u, d, q);
   if (d === 'limit_menu') return cb_limit_menu(env, uid, cid, mid, u, d, q);
@@ -1705,10 +1612,7 @@ async function cb_link(env, uid, cid, mid, u, d, q) {
       : [{ text: '\u{1F4CA} \u4FEE\u6539\u6B21\u6570', callback_data: 'mod_acc_' + l.id }];
 
     const rows = [
-      [
-        { text: '\u{1F4E4} \u5206\u4EAB', url: 'https://t.me/share/url?url=' + encodeURIComponent(clipUrl) },
-        { text: '\u{1F4DD} \u5907\u6CE8', callback_data: 'rename_' + l.id },
-      ],
+      [{ text: '\u{1F4E4} \u5206\u4EAB', url: 'https://t.me/share/url?url=' + encodeURIComponent(clipUrl) }],
       [
         ttlRow[0],
         ...(accRow.length ? [accRow[0]] : []),
@@ -1853,102 +1757,7 @@ async function cb_chg_ttl(env, uid, cid, mid, u, d, q) {
     });
 }
 
-async function cb_rename(env, uid, cid, mid, u, d, q) {
-  const linkId = d.replace('rename_', '');
-  u.state = 'RENAME_' + linkId;
-  u.promptCid = cid;
-  u.promptMid = mid;
-  return tg('editMessageText', env.BOT_TOKEN, {
-    chat_id: cid,
-    message_id: mid,
-    text: '\u{1F4DD} <b>\u4FEE\u6539\u5907\u6CE8</b>\n\n\u53D1\u9001\u65B0\u7684\u5907\u6CE8\u5185\u5BB9\uFF0C\u6216\u53D1\u9001 /cancel \u53D6\u6D88\u3002',
-    parse_mode: 'HTML',
-    reply_markup: { inline_keyboard: [[{ text: '\u2716 \u53D6\u6D88', callback_data: 'link_' + linkId }]] },
-  });
-}
 
-async function cb_do_rename(env, uid, cid, mid, u, d, q) {
-  const linkId = d.replace('do_rename_', '');
-  const links = await getUserLinks(uid, env);
-  const l = links.find(x => x.id === linkId);
-  if (!l) {
-    u.state = null;
-    return tg('editMessageText', env.BOT_TOKEN, {
-      chat_id: cid, message_id: mid,
-      text: '\u274C \u77ED\u94FE\u5DF2\u4E0D\u5B58\u5728',
-      parse_mode: 'HTML',
-      reply_markup: mainKb(),
-    });
-  }
-  if (!l.remark) l.remark = '';
-  await env.KV.put('ulinks:' + uid, JSON.stringify(links));
-  u.state = null;
-  // 重新显示详情页
-  const clipUrl = ((env.CLIP_URL || '').replace(/\/+$/, '')) + '/share/' + l.id;
-  let kvAlive = false, accessedCount = 0, accessedLimit = l.maxAccess || 0;
-  try {
-    const raw = await env.KV.get('share_' + l.id, { type: 'json' });
-    if (raw) {
-      kvAlive = true;
-      accessedCount = Array.isArray(raw.accessedIPs) ? raw.accessedIPs.length : 0;
-      accessedLimit = raw.maxAccess || l.maxAccess || 0;
-    }
-  } catch {}
-  const isConsumed = !kvAlive && (l.maxAccess > 0 || l.burn);
-  const isExpired = l.ttl > 0 && l.expiresAt && Date.now() > l.expiresAt;
-  const isDead = isExpired || isConsumed || (!kvAlive && l.ttl > 0);
-  let statusIcon, statusText;
-  if (isDead) {
-    statusIcon = '\u26AB';
-    statusText = isConsumed ? '\u26AB \u5DF2\u6D88\u8017' : '\u26AB \u5DF2\u8FC7\u671F';
-  } else if (l.ttl === 0) {
-    statusIcon = '\u{1F535}';
-    statusText = '\u{1F535} \u6C38\u4E45\u6709\u6548';
-  } else if (l.burn) {
-    statusIcon = '\u{1F525}';
-    statusText = '\u{1F525} \u9605\u540E\u5373\u711A';
-  } else {
-    statusIcon = '\u{1F7E0}';
-    statusText = formatRemaining(l.expiresAt);
-  }
-  let text = '\u{1F4CB} <b>\u77ED\u94FE\u8BE6\u60C5</b>\n\n';
-  text += statusIcon + ' <b>' + escapeHTML(l.preview) + '</b>\n';
-  if (l.remark) text += '\u{1F4DD} \u5907\u6CE8: ' + escapeHTML(l.remark) + '\n';
-  text += '\u{1F4CA} ' + (l.nodeCount || 0) + ' \u8282\u70B9  \u00B7 ' + statusText + '\n';
-  if (kvAlive) {
-    text += '\u{1F4F1} \u8BBF\u95EE: ' + accessedCount + ' \u8BBE\u5907';
-    if (accessedLimit > 0) text += ' / ' + accessedLimit + ' IP';
-    text += '\n';
-  }
-  text += '\n\u{1F517} <code>' + escapeHTML(clipUrl) + '</code>';
-  const ttlRow = isDead
-    ? [{ text: '\u26AB \u5DF2\u6D88\u8017/\u8FC7\u671F', callback_data: 'noop' }]
-    : [{ text: '\u23F1 \u4FEE\u6539\u6642\u6548', callback_data: 'mod_ttl_' + l.id }];
-  const accRow = isDead
-    ? []
-    : [{ text: '\u{1F4CA} \u4FEE\u6539\u6B21\u6570', callback_data: 'mod_acc_' + l.id }];
-  const rows = [
-    [
-      { text: '\u{1F4E4} \u5206\u4EAB', url: 'https://t.me/share/url?url=' + encodeURIComponent(clipUrl) },
-      { text: '\u{1F4DD} \u5907\u6CE8', callback_data: 'rename_' + l.id },
-    ],
-    [
-      ttlRow[0],
-      ...(accRow.length ? [accRow[0]] : []),
-    ],
-    [
-      { text: '\u{1F5D1} \u5220\u9664\u77ED\u94FE', callback_data: 'del_confirm_' + l.id },
-      { text: '\u2190 \u8FD4\u56DE\u5217\u8868', callback_data: 'my_links_0' },
-    ],
-  ];
-  return tg('editMessageText', env.BOT_TOKEN, {
-    chat_id: cid,
-    message_id: mid,
-    text: text,
-    parse_mode: 'HTML',
-    reply_markup: { inline_keyboard: rows },
-  });
-}
 
 async function cb_mod_acc(env, uid, cid, mid, u, d, q) {
   const linkId = d.replace('mod_acc_', '');
