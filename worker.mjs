@@ -49,6 +49,11 @@ function escapeHTML(s) {
   return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
+// TTL 秒数 → 中文标签
+function formatTtlLabel(s) {
+  return s === 0 ? '\u6C38\u4E0D\u8FC7\u671F' : s < 3600 ? Math.round(s / 60) + '\u5206\u949F' : Math.round(s / 3600) + '\u5C0F\u65F6';
+}
+
 // ==================== Surge 格式行解析 ====================
 
 function parseSurgeLines(text) {
@@ -307,7 +312,7 @@ function fmtKb(allowed, convTtl, ttlDefault, u) {
   }
   if (row.length) rows.push(row);
   const ttlVal = convTtl !== undefined && convTtl !== null ? convTtl : (ttlDefault !== undefined ? ttlDefault : 0);
-  const ttlLabel = ttlVal === 0 ? '\u6C38\u4E0D\u8FC7\u671F' : ttlVal < 3600 ? Math.round(ttlVal / 60) + '\u5206\u949F' : Math.round(ttlVal / 3600) + '\u5C0F\u65F6';
+  const ttlLabel = formatTtlLabel(ttlVal);
   const effAcc = u?._convAccessLimit != null ? u._convAccessLimit : (u?._accessLimit != null ? u._accessLimit : 0);
   const accLabel = effAcc === 0 ? '\u4E0D\u9650' : effAcc + ' IP';
   rows.push([{ text: '\u{23F1} \u672C\u6B21\u65F6\u9650: ' + ttlLabel + ' / ' + accLabel, callback_data: 'conv_limit_menu' }]);
@@ -458,10 +463,7 @@ function mainPageText() {
     '\u{1F310} <b>\u8FDC\u7A0B\u8BA2\u9605</b> \u2014 \u53D1\u94FE\u63A5\uFF0C\u81EA\u52A8\u62C9\u53D6\u8F6C\u6362\n' +
     '\u{1F4CE} <b>\u672C\u5730\u8BA2\u9605</b> \u2014 \u53D1\u8282\u70B9/\u6587\u4EF6\uFF0C\u81EA\u52A8\u89E3\u6790\u8F6C\u6362\n' +
     '\u2705 \u666E\u901A\u6587\u672C \u2014 \u81EA\u52A8\u4FDD\u5B58\u4E3A\u77ED\u94FE\n\n' +
-    '\u{1F4E6} <b>\u8F93\u51FA\u683C\u5F0F (12\u79CD)</b>\n' +
-    'Clash Meta / QX / Surge / Shadowrocket\n' +
-    'sing-box / V2Ray / Loon / Stash\n' +
-    'Surfboard / Egern / URI / JSON\n\n' +
+    '\u{1F4E6} <b>\u8F93\u51FA\u683C\u5F0F (' + FORMAT_OPTIONS.length + ')</b>\n\n' +
     '\u{1F517} \u8F6C\u6362\u7ED3\u679C\u4EE5\u77ED\u94FE\u5F62\u5F0F\u8FD4\u56DE';
 }
 
@@ -475,7 +477,7 @@ function getState(uid) {
       const first = stateMap.keys().next().value;
       stateMap.delete(first);
     }
-    stateMap.set(uid, { _uid: uid, _regionCache: {} });
+    stateMap.set(uid, { _uid: uid });
   }
   return stateMap.get(uid);
 }
@@ -743,9 +745,7 @@ function deduplicateProxies(proxies) {
   });
 }
 
-// ==================== 脚本相关功能已移除 ====================
 
-// ==================== KV 累计状态（跨实例共享） ====================
 
 // ==================== 编辑提示消息或发新消息 ====================
 
@@ -1274,7 +1274,7 @@ async function onMsg(msg, env) {
     landing: u?._landing || false,
   }, getEffectiveMaxAccess(u));
   const previewShow = content.length > 150 ? content.slice(0, 150) + '...' : content;
-  const ttlT = ttl === 0 ? '\u6C38\u4E0D\u8FC7\u671F' : ttl < 3600 ? Math.round(ttl / 60) + '\u5206\u949F' : Math.round(ttl / 3600) + '\u5C0F\u65F6';
+  const ttlT = formatTtlLabel(ttl);
   const accT = getEffectiveMaxAccess(u) === 0 ? '' : '\n\u{1F4CA} ' + getEffectiveMaxAccess(u) + ' IP';
   u._lastContent = content;
   u._lastRawContent = content;
@@ -1625,14 +1625,11 @@ async function cb_link(env, uid, cid, mid, u, d, q) {
 
     let text = '\u{1F4CB} <b>\u77ED\u94FE\u8BE6\u60C5</b>\n\n';
     text += statusIcon + ' <b>' + escapeHTML(l.preview) + '</b>\n';
-    if (l.remark) text += '\u{1F4DD} \u5907\u6CE8: ' + escapeHTML(l.remark) + '\n';
     text += '\u{1F4CA} ' + (l.nodeCount || 0) + ' \u8282\u70B9  \u00B7 ' + statusText + '\n';
     if (kvAlive) {
       text += '\u{1F4F1} \u8BBF\u95EE: ' + accessedCount + ' \u8BBE\u5907';
       if (accessedLimit > 0) text += ' / ' + accessedLimit + ' IP';
       text += '\n';
-    } else if (l.maxAccess > 0 && !isConsumed) {
-      // KV 不存在但还没过期（例如刚创建还没人访问过——这种情况不可能，KV 创建就有）
     }
     text += '\n\u{1F517} <code>' + escapeHTML(clipUrl) + '</code>';
     
@@ -1713,12 +1710,15 @@ async function cb_do_del(env, uid, cid, mid, u, d, q) {
 
 async function cb_mod_ttl(env, uid, cid, mid, u, d, q) {
   const linkId = d.replace('mod_ttl_', '');
+    const links = await getUserLinks(uid, env);
+    const l = links.find(x => x.id === linkId);
+    const curTtl = l ? (l.ttl || 0) : 0;
     return tg('editMessageText', env.BOT_TOKEN, {
       chat_id: cid,
       message_id: mid,
       text: '\u23F1 <b>\u4FEE\u6539\u77ED\u94FE\u6642\u6548</b>\n\n\u9009\u62E9\u65B0\u7684\u6642\u6548\uFF0C\u5DF2\u8FC7\u671F\u7684\u77ED\u94FE\u65E0\u6CD5\u6062\u590D\u3002',
       parse_mode: 'HTML',
-      reply_markup: ttlKb(0, 'chg_ttl_' + linkId + ':'),
+      reply_markup: ttlKb(curTtl, 'chg_ttl_' + linkId + ':'),
     });
 }
 
@@ -1733,13 +1733,8 @@ async function cb_chg_ttl(env, uid, cid, mid, u, d, q) {
         const kvOpts = newTtl > 0 ? { expirationTtl: newTtl } : {};
         await env.KV.put('share_' + linkId, JSON.stringify({ ...data, ttl: newTtl }), kvOpts);
       } else {
-        return tg('editMessageText', env.BOT_TOKEN, {
-          chat_id: cid,
-          message_id: mid,
-          text: '\u274C \u77ED\u94FE\u5DF2\u8FC7\u671F\uFF0C\u65E0\u6CD5\u4FEE\u6539\n\n\u5DF2\u8FC7\u671F\u7684\u77ED\u94FE\u65E0\u6CD5\u6062\u590D\uFF0C\u8BF7\u8FD4\u56DE\u5217\u8868\u5220\u9664\u3002',
-          parse_mode: 'HTML',
-          reply_markup: { inline_keyboard: [[{ text: '\u2190 \u8FD4\u56DE\u5217\u8868', callback_data: 'my_links_0' }]] },
-        });
+        return editMsg(env, cid, mid, '\u274C \u77ED\u94FE\u5DF2\u8FC7\u671F\uFF0C\u65E0\u6CD5\u4FEE\u6539\n\n\u5DF2\u8FC7\u671F\u7684\u77ED\u94FE\u65E0\u6CD5\u6062\u590D\uFF0C\u8BF7\u8FD4\u56DE\u5217\u8868\u5220\u9664\u3002',
+          { inline_keyboard: [[{ text: '\u2190 \u8FD4\u56DE\u5217\u8868', callback_data: 'my_links_0' }]] });
       }
     } catch (e) { /* ignore */ }
     const links = await getUserLinks(uid, env);
@@ -1752,47 +1747,24 @@ async function cb_chg_ttl(env, uid, cid, mid, u, d, q) {
     const l = links.find(x => x.id === linkId);
     if (l) {
       const clipUrl = ((env.CLIP_URL || '').replace(/\/+$/, '')) + '/share/' + l.id;
-      const statusText = l.ttl === 0 ? '\u{1F535} \u6C38\u4E45\u6709\u6548'
-        : l.expiresAt && Date.now() > l.expiresAt ? '\u26AB \u5DF2\u8FC7\u671F'
-        : formatRemaining(l.expiresAt);
       let text = '\u{1F4CB} <b>\u77ED\u94FE\u8BE6\u60C5</b>\n\n';
       text += linkStatusIcon(l) + ' <b>' + escapeHTML(l.preview) + '</b>\n';
-      text += '\u{1F4CA} ' + (l.nodeCount || 0) + ' \u8282\u70B9  \u00B7 ' + statusText + '\n\n';
+      text += '\u{1F4CA} ' + (l.nodeCount || 0) + ' \u8282\u70B9  \u00B7 ' + (l.ttl === 0 ? '\u{1F535} \u6C38\u4E45\u6709\u6548' : (l.expiresAt && Date.now() > l.expiresAt ? '\u26AB \u5DF2\u8FC7\u671F' : formatRemaining(l.expiresAt))) + '\n\n';
       text += '\u{1F517} <code>' + escapeHTML(clipUrl) + '</code>';
-      return tg('editMessageText', env.BOT_TOKEN, {
-        chat_id: cid,
-        message_id: mid,
-        text: text,
-        parse_mode: 'HTML',
-        reply_markup: (() => {
-          const isExpired = l.ttl > 0 && l.expiresAt && Date.now() > l.expiresAt;
-          const ttlRow = isExpired
-            ? [{ text: '\u26AB \u5DF2\u8FC7\u671F\uFF0C\u65E0\u6CD5\u4FEE\u6539', callback_data: 'noop' }]
-            : [{ text: '\u23F1 \u4FEE\u6539\u6642\u6548', callback_data: 'mod_ttl_' + l.id }];
-          const rows = [
-            [{ text: '\u{1F4CB} \u590D\u5236\u94FE\u63A5', copy_text: { text: clipUrl } },
-             { text: '\u{1F517} \u4E3B\u94FE', url: clipUrl },
-             { text: '\u{1F4E4} \u5206\u4EAB', url: 'https://t.me/share/url?url=' + encodeURIComponent(clipUrl) }],
-            ttlRow,
-          ];
-          if (!isExpired) rows.push([{ text: '\u{1F4CA} \u4FEE\u6539\u6B21\u6570', callback_data: 'mod_acc_' + l.id }]);
-          rows.push(
-            [{ text: '\u{1F5D1} \u5220\u9664\u77ED\u94FE', callback_data: 'del_confirm_' + l.id }],
-            [{ text: '\u2190 \u8FD4\u56DE\u5217\u8868', callback_data: 'my_links_0' }],
-          );
-          return { inline_keyboard: rows };
-        })(),
-      });
+      const shareUrl = 'https://t.me/share/url?url=' + encodeURIComponent(clipUrl);
+      const isExpired = l.ttl > 0 && l.expiresAt && Date.now() > l.expiresAt;
+      const rows = [
+        [{ text: '\u{1F4E4} \u5206\u4EAB', url: shareUrl },
+         { text: '\u{1F4DD} \u5907\u6CE8', callback_data: 'rename_' + l.id }],
+        [{ text: '\u23F1 \u65F6\u6548', callback_data: isExpired ? 'noop' : 'mod_ttl_' + l.id },
+         { text: '\u{1F4CA} \u6B21\u6570', callback_data: 'mod_acc_' + l.id }],
+        [{ text: '\u{1F5D1} \u5220\u9664\u77ED\u94FE', callback_data: 'del_confirm_' + l.id }],
+        [{ text: '\u2190 \u8FD4\u56DE\u5217\u8868', callback_data: 'my_links_0' }],
+      ];
+      return editMsg(env, cid, mid, text, { inline_keyboard: rows });
     }
-    return tg('editMessageText', env.BOT_TOKEN, {
-      chat_id: cid,
-      message_id: mid,
-      text: '\u2705 \u5DF2\u4FEE\u6539',
-      parse_mode: 'HTML',
-      reply_markup: { inline_keyboard: [[{ text: '\u2190 \u8FD4\u56DE\u5217\u8868', callback_data: 'my_links_0' }]] },
-    });
+    return editMsg(env, cid, mid, '\u2705 \u5DF2\u4FEE\u6539');
 }
-
 
 
 async function cb_mod_acc(env, uid, cid, mid, u, d, q) {
@@ -1840,49 +1812,29 @@ async function cb_chg_acc(env, uid, cid, mid, u, d, q) {
     const l = links.find(x => x.id === linkId);
     if (l) {
       const clipUrl = ((env.CLIP_URL || '').replace(/\/+$/, '')) + '/share/' + l.id;
-      const statusText = l.ttl === 0 ? '\u{1F535} \u6C38\u4E45\u6709\u6548'
-        : l.expiresAt && Date.now() > l.expiresAt ? '\u26AB \u5DF2\u8FC7\u671F'
-        : formatRemaining(l.expiresAt);
       let text = '\u{1F4CB} <b>\u77ED\u94FE\u8BE6\u60C5</b>\n\n';
       text += linkStatusIcon(l) + ' <b>' + escapeHTML(l.preview) + '</b>\n';
-      text += '\u{1F4CA} ' + (l.nodeCount || 0) + ' \u8282\u70B9  \u00B7 ' + statusText + '\n\n';
+      text += '\u{1F4CA} ' + (l.nodeCount || 0) + ' \u8282\u70B9  \u00B7 ' + (l.ttl === 0 ? '\u{1F535} \u6C38\u4E45\u6709\u6548' : (l.expiresAt && Date.now() > l.expiresAt ? '\u26AB \u5DF2\u8FC7\u671F' : formatRemaining(l.expiresAt))) + '\n\n';
       text += '\u{1F517} <code>' + escapeHTML(clipUrl) + '</code>';
-      return tg('editMessageText', env.BOT_TOKEN, {
-        chat_id: cid, message_id: mid,
-        text: text,
-        parse_mode: 'HTML',
-        reply_markup: (() => {
-          const isExpired = l.ttl > 0 && l.expiresAt && Date.now() > l.expiresAt;
-          const ttlRow = isExpired
-            ? [{ text: '\u26AB \u5DF2\u8FC7\u671F\uFF0C\u65E0\u6CD5\u4FEE\u6539', callback_data: 'noop' }]
-            : [{ text: '\u23F1 \u4FEE\u6539\u6642\u6548', callback_data: 'mod_ttl_' + l.id }];
-          const rows = [
-            [{ text: '\u{1F4CB} \u590D\u5236\u94FE\u63A5', copy_text: { text: clipUrl } },
-             { text: '\u{1F517} \u4E3B\u94FE', url: clipUrl },
-             { text: '\u{1F4E4} \u5206\u4EAB', url: 'https://t.me/share/url?url=' + encodeURIComponent(clipUrl) }],
-            ttlRow,
-          ];
-          if (!isExpired) rows.push([{ text: '\u{1F4CA} \u4FEE\u6539\u6B21\u6570', callback_data: 'mod_acc_' + l.id }]);
-          rows.push(
-            [{ text: '\u{1F5D1} \u5220\u9664\u77ED\u94FE', callback_data: 'del_confirm_' + l.id }],
-            [{ text: '\u2190 \u8FD4\u56DE\u5217\u8868', callback_data: 'my_links_0' }],
-          );
-          return { inline_keyboard: rows };
-        })(),
-      });
+      const shareUrl = 'https://t.me/share/url?url=' + encodeURIComponent(clipUrl);
+      const isExpired = l.ttl > 0 && l.expiresAt && Date.now() > l.expiresAt;
+      const rows = [
+        [{ text: '\u{1F4E4} \u5206\u4EAB', url: shareUrl },
+         { text: '\u{1F4DD} \u5907\u6CE8', callback_data: 'rename_' + l.id }],
+        [{ text: '\u23F1 \u65F6\u6548', callback_data: isExpired ? 'noop' : 'mod_ttl_' + l.id },
+         { text: '\u{1F4CA} \u6B21\u6570', callback_data: 'mod_acc_' + l.id }],
+        [{ text: '\u{1F5D1} \u5220\u9664\u77ED\u94FE', callback_data: 'del_confirm_' + l.id }],
+        [{ text: '\u2190 \u8FD4\u56DE\u5217\u8868', callback_data: 'my_links_0' }],
+      ];
+      return editMsg(env, cid, mid, text, { inline_keyboard: rows });
     }
-    return tg('editMessageText', env.BOT_TOKEN, {
-      chat_id: cid, message_id: mid,
-      text: '\u2705 \u5DF2\u4FEE\u6539',
-      parse_mode: 'HTML',
-      reply_markup: { inline_keyboard: [[{ text: '\u2190 \u8FD4\u56DE\u5217\u8868', callback_data: 'my_links_0' }]] },
-    });
+    return editMsg(env, cid, mid, '\u2705 \u5DF2\u4FEE\u6539');
 }
 
 async function cb_limit_menu(env, uid, cid, mid, u, d, q) {
   const defTtl = u.ttl !== undefined ? u.ttl : 0;
     const defAcc = u._accessLimit !== undefined ? u._accessLimit : 0;
-    const ttlLabel = defTtl === 0 ? '\u6C38\u4E0D\u8FC7\u671F' : defTtl < 3600 ? Math.round(defTtl / 60) + '\u5206\u949F' : Math.round(defTtl / 3600) + '\u5C0F\u65F6';
+    const ttlLabel = formatTtlLabel(defTtl);
     const accLabel = defAcc === 0 ? '\u4E0D\u9650' : defAcc + ' IP';
     return tg('editMessageText', env.BOT_TOKEN, {
       chat_id: cid, message_id: mid,
@@ -1900,7 +1852,7 @@ async function cb_limit_menu(env, uid, cid, mid, u, d, q) {
 
 async function cb_ttl_menu(env, uid, cid, mid, u, d, q) {
   const curTtl = u.ttl || 0;
-    const curLabel = curTtl === 0 ? '\u6C38\u4E0D\u8FC7\u671F' : curTtl < 3600 ? Math.round(curTtl / 60) + '\u5206\u949F' : Math.round(curTtl / 3600) + '\u5C0F\u65F6';
+    const curLabel = formatTtlLabel(curTtl);
     return tg('editMessageText', env.BOT_TOKEN, {
       chat_id: cid,
       message_id: mid,
@@ -1913,9 +1865,9 @@ async function cb_ttl_menu(env, uid, cid, mid, u, d, q) {
 async function cb_ttl_set(env, uid, cid, mid, u, d, q) {
   const ttlVal = parseInt(d.split(':')[1]);
     u.ttl = ttlVal;
-    saveUserConfig(uid, env, u);
+    await saveUserConfig(uid, env, u);
     u._lastTtlSet = Date.now();
-    const ttlLabel = ttlVal === 0 ? '\u6C38\u4E0D\u8FC7\u671F' : ttlVal < 3600 ? Math.round(ttlVal / 60) + '\u5206\u949F' : Math.round(ttlVal / 3600) + '\u5C0F\u65F6';
+    const ttlLabel = formatTtlLabel(ttlVal);
     return tg('editMessageText', env.BOT_TOKEN, {
       chat_id: cid,
       message_id: mid,
@@ -1938,7 +1890,7 @@ async function cb_acc_menu(env, uid, cid, mid, u, d, q) {
 async function cb_acc_set(env, uid, cid, mid, u, d, q) {
   const accVal = parseInt(d.split(':')[1]);
     u._accessLimit = accVal;
-    saveUserConfig(uid, env, u);
+    await saveUserConfig(uid, env, u);
     return tg('editMessageText', env.BOT_TOKEN, {
       chat_id: cid, message_id: mid,
       text: '\u2705 \u5DF2\u8BBE\u7F6E\u9ED8\u8BA4\u8BBF\u95EE\u6B21\u6570: ' + (accVal === 0 ? '\u4E0D\u9650' : accVal + ' IP'),
@@ -1975,7 +1927,7 @@ async function cb_conv_back(env, uid, cid, mid, u, d, q) {
 
 async function cb_conv_limit_menu(env, uid, cid, mid, u, d, q) {
   const effConvTtl = u._convTtl !== undefined ? u._convTtl : (u.ttl || 0);
-    const ttlLabel = effConvTtl === 0 ? '\u6C38\u4E0D\u8FC7\u671F' : effConvTtl < 3600 ? Math.round(effConvTtl / 60) + '\u5206\u949F' : Math.round(effConvTtl / 3600) + '\u5C0F\u65F6';
+    const ttlLabel = formatTtlLabel(effConvTtl);
     const effConvAcc = u._convAccessLimit != null ? u._convAccessLimit : (u._accessLimit != null ? u._accessLimit : 0);
     const accLabel = effConvAcc === 0 ? '\u4E0D\u9650' : effConvAcc + ' IP';
     return tg('editMessageText', env.BOT_TOKEN, {
@@ -2009,7 +1961,7 @@ async function cb_conv_ttl_set(env, uid, cid, mid, u, d, q) {
     return tg('editMessageText', env.BOT_TOKEN, {
       chat_id: cid,
       message_id: mid,
-      text: '\u2705 \u5DF2\u8BBE\u7F6E\u5F53\u524D\u6642\u6548: ' + (ttlVal === 0 ? '\u6C38\u4E0D\u8FC7\u671F' : ttlVal < 3600 ? Math.round(ttlVal / 60) + '\u5206\u949F' : Math.round(ttlVal / 3600) + '\u5C0F\u65F6'),
+      text: '\u2705 \u5DF2\u8BBE\u7F6E\u5F53\u524D\u6642\u6548: ' + formatTtlLabel(ttlVal),
       parse_mode: 'HTML',
       reply_markup: fmtKb(null, u._convTtl, u.ttl, u),
     });
@@ -2059,7 +2011,7 @@ async function cb_conv_fmt(env, uid, cid, mid, u, d, q) {
         u._convTtl = null;
         env.KV.delete('collect:' + uid).catch(() => {});
         u._convAccessLimit = null;
-        const ttlT = effTtl === 0 ? '\u6C38\u4E0D\u8FC7\u671F' : effTtl < 3600 ? Math.round(effTtl / 60) + '\u5206\u949F' : Math.round(effTtl / 3600) + '\u5C0F\u65F6';
+        const ttlT = formatTtlLabel(effTtl);
         const accT = effAcc === 0 ? '' : '\n\u{1F4CA} ' + effAcc + ' IP';
         await tg('editMessageText', env.BOT_TOKEN, {
           chat_id: cid,
@@ -2289,7 +2241,7 @@ async function cb_conv_fmt(env, uid, cid, mid, u, d, q) {
       u._convTtl = null;
       env.KV.delete('collect:' + uid).catch(() => {});
       u._convAccessLimit = null;
-      const ttlT = effTtl2 === 0 ? '\u6C38\u4E0D\u8FC7\u671F' : effTtl2 < 3600 ? Math.round(effTtl2 / 60) + '\u5206\u949F' : Math.round(effTtl2 / 3600) + '\u5C0F\u65F6';
+      const ttlT = formatTtlLabel(effTtl2);
       const accT = effAcc === 0 ? '' : '\n\u{1F4CA} ' + effAcc + ' IP';
       let resText = '\u2705 <b>\u8F6C\u6362\u5B8C\u6210</b>\n\n\u{1F4CA} ' + u._lastProxies.length + ' \u8282\u70B9 \u2192 <b>' + fmtLabel + '</b>\n\n\u{1F517} <code>' + clipUrl + '</code>\n';
       for (const e of extraUrls) resText += '\n' + e.text + '\n<code>' + e.url + '</code>\n';
@@ -2450,7 +2402,9 @@ export default {
           const ipResult = await atomicTrackIP(env, id, clientIP, maxIPs, ttl);
           if (ipResult.consumed) {
             myLandingConsumed = true;
-            await env.KV.put('share_' + id, JSON.stringify({ ...raw, landingConsumed: true }), ttl > 0 ? { expirationTtl: ttl < 60 ? 60 : ttl } : {});
+            // 落地页消耗 + 阅后即焚 → 同时销毁真链
+            const kvData = burn ? { ...raw, landingConsumed: true, consumed: true, text: '' } : { ...raw, landingConsumed: true };
+            await env.KV.put('share_' + id, JSON.stringify(kvData), ttl > 0 ? { expirationTtl: ttl < 60 ? 60 : ttl } : {});
           }
         } else if (!myLandingConsumed) {
           await atomicTrackIP(env, id, clientIP, 0, ttl);
