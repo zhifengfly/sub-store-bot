@@ -29,7 +29,7 @@ Telegram Bot — 订阅转换 + 短链分享，内置完整 Sub-Store 引擎。
    - `BOT_TOKEN` = Telegram Bot Token（必须是文本类型，**必填**，在执行步骤3激活之前填）
    - `CLIP_URL` = 你的 Worker 域名或其他可路由到此worker的域名，如 `https://xxx.workers.dev`（**必填**，在执行步骤3激活之后填）
    - `WEBHOOK_SECRET` = 域名防呆（可选，随便设置个密码）
-   - `PROXY_URL` = 反代地址，绕过 CF 拦截（可选，[搭建教程](docs/proxy-setup.md)）
+   - `PROXY_URL` = 反代地址，绕过 CF 拦截（可选，[搭建教程](landing/proxy-setup.md)）
    - `DEBUG_TOKEN` = 随意设个密码，用于 debug-fetch 接口鉴权（可选）
    - `LANDING_HTML_URL` = 自定义落地页 HTML，不设则用默认（可选）
 4. 去 **描述** 页面，点 Worker 域名激活 bot，然后复制此域名去填CLIP_URL
@@ -57,7 +57,8 @@ Telegram Bot — 订阅转换 + 短链分享，内置完整 Sub-Store 引擎。
 ├── README.md
 ├── landing/
 │   └── index.html          # 默认落地页
-├── docs/
+├── landing/
+│   ├── index.html          # 默认落地页
 │   └── proxy-setup.md      # 反代搭建教程
 ├── tools/
 │   ├── substorebot-deploy-code.py  # CF 部署脚本（本地用）
