@@ -13,7 +13,7 @@ BASE = f'https://api.cloudflare.com/client/v4/accounts/{ACCOUNT}/workers/scripts
 
 meta = json.dumps({
     'main_module': 'worker.mjs',
-    'keep_bindings': ['kv_namespaces', 'vars', 'secrets', 'services'],
+    'keep_bindings': ['kv_namespace', 'plain_text', 'secret_text', 'service'],
 })
 files = (
     ('metadata', ('meta.json', meta, 'application/json')),
