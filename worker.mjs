@@ -1404,6 +1404,7 @@ async function onCb(q, env) {
 // ==================== onCb 路由处理函数 ====================
 
 async function cb_menu(env, uid, cid, mid, u, d, q) {
+    return await safeExecute(async () => {
   // 返回主页 → 清理所有收集/临时状态
   u._collected = null;
   u._collectMode = null;
@@ -1415,7 +1416,8 @@ async function cb_menu(env, uid, cid, mid, u, d, q) {
       parse_mode: 'HTML',
       reply_markup: mainKb(),
     });
-}
+
+    }, env, uid, cid, mid, '格式转换');}
 
 async function cb_input_url(env, uid, cid, mid, u, d, q) {
   u._collectMode = 'url';
@@ -1440,6 +1442,7 @@ async function cb_input_file(env, uid, cid, mid, u, d, q) {
 }
 
 async function cb_collection_process(env, uid, cid, mid, u, d, q) {
+  return await safeExecute(async () => {
     const mode = u._collectMode;
     const items = u._collected || [];
     u._collectMode = null;
@@ -1533,7 +1536,8 @@ async function cb_collection_process(env, uid, cid, mid, u, d, q) {
       chat_id: cid, message_id: mid, text, parse_mode: 'HTML',
       reply_markup: fmtKb(formats, u._convTtl, u.ttl, u),
     });
-}
+
+  }, env, uid, cid, mid, '订阅处理');}
 
 async function cb_ua_menu(env, uid, cid, mid, u, d, q) {
   return showUaSettings(cid, mid, uid, env);
