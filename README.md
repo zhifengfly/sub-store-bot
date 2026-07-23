@@ -58,15 +58,17 @@ Telegram Bot — 订阅转换 + 短链分享，内置完整 Sub-Store 引擎。
 ├── landing/
 │   └── index.html          # 默认落地页
 ├── docs/
-│   ├── proxy-setup.md      # 反代搭建教程
-├── _workflows/
-│   └── fork-sync.yml       # 同步模板（fork 用）
+│   └── proxy-setup.md      # 反代搭建教程
 ├── tools/
-│   └── proxy-utils-src/    # 引擎源码 + 构建脚本（sync-proxy-utils.js / build-proxy-utils.js / buffer_shim.js）
+│   ├── substorebot-deploy-code.py  # CF 部署脚本（本地用）
+│   └── proxy-utils-src/    # 引擎源码 + 构建脚本
+│       ├── sync-proxy-utils.js     # 从 sub-store-org/Sub-Store 同步
+│       ├── build-proxy-utils.js    # PEG 预编译 + esbuild 打包
+│       ├── buffer_shim.js          # Buffer 全局兼容（CF 不支持 import 'buffer'）
+│       └── src/                    # Sub-Store 引擎源码
 └── .github/
     └── workflows/
-        ├── sync-proxy-utils.yml  # Sub-Store 引擎自动同步
-        └── deploy.yml            # 纯代码部署
+        └── sync-proxy-utils.yml    # 引擎自动同步（每周日 6:00 UTC）
 ```
 
 ## Sub-Store 引擎
