@@ -8,18 +8,21 @@ BASE = f"https://api.cloudflare.com/client/v4/accounts/{ACCOUNT}/workers/scripts
 HEADERS = {"Authorization": f"Bearer {TOKEN}"}
 
 # 1) GET 当前 bindings（变量/密钥/服务绑定等）
-r = requests.get(BASE, headers=HEADERS)
-if r.status_code == 200:
-    existing = r.json().get("result", {})
-    bindings = existing.get("bindings", [])
-    compat_date = existing.get("compatibility_date", "")
-    compat_flags = existing.get("compatibility_flags", [])
-    print(f"Found {len(bindings)} existing binding(s)")
-else:
-    bindings = []
-    compat_date = ""
-    compat_flags = []
-    print(f"No existing script (HTTP {r.status_code}), fresh deploy")
+bindings = []
+compat_date = ""
+compat_flags = []
+try:
+    r = requests.get(BASE, headers=HEADERS)
+    if r.status_code == 200 and r.text.strip():
+        existing = r.json().get("result", {})
+        bindings = existing.get("bindings", [])
+        compat_date = existing.get("compatibility_date", "")
+        compat_flags = existing.get("compatibility_flags", [])
+        print(f"Found {len(bindings)} existing binding(s)")
+    else:
+        print(f"No existing script (HTTP {r.status_code}), fresh deploy")
+except Exception as e:
+    print(f"Warning: could not fetch existing bindings: {e}")
 
 # 2) 构建 metadata — 保留 bindings
 meta = {"main_module": "worker.mjs"}
