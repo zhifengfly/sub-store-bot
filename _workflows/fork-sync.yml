@@ -1,5 +1,4 @@
 name: Fork Sync
-
 on:
   schedule:
     - cron: "0 6 * * *"
@@ -10,73 +9,46 @@ permissions:
 
 jobs:
   sync:
-    name: Sync & Deploy
+    name: Sync Upstream
     runs-on: ubuntu-latest
     if: ${{ github.event.repository.fork || github.event_name == 'workflow_dispatch' }}
-
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          token: ${{ secrets.SYNC_PAT }}
 
-      - name: Sync upstream
-        id: sync
+      - name: Sync from upstream
         run: |
           git config user.name "GitHub Actions Bot"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
           # 添加上游
-          if git remote get-url upstream >/dev/null 2>&1; then
-            git remote set-url upstream https://github.com/Linsars/sub-store-bot.git
-          else
-            git remote add upstream https://github.com/Linsars/sub-store-bot.git
-          fi
-
-          git fetch --prune origin main
+          git remote get-url upstream >/dev/null 2>&1 || git remote add upstream https://github.com/Linsars/sub-store-bot.git
+          git remote set-url upstream https://github.com/Linsars/sub-store-bot.git
           git fetch --prune upstream main
 
-          # 备份本地配置（不随上游覆盖）
+          # 备份本地文件（不随上游覆盖）
           mkdir -p /tmp/wfbak
-          cp -r .github/workflows/* /tmp/wfbak/ 2>/dev/null || true
-          cp wrangler.toml /tmp/wfbak/ 2>/dev/null || true
-          # 保存当前 workflow 到 env var（reset 会覆盖）
-          SAVED_WORKFLOW=$(cat .github/workflows/fork-sync.yml | base64)
+          cp .github/workflows/fork-sync.yml /tmp/wfbak/ 2>/dev/null || true
+          [ -f wrangler.toml ] && cp wrangler.toml /tmp/wfbak/ 2>/dev/null || true
 
-          # 直接重置到上游
+          # 重置到上游
           git checkout main
           git reset --hard upstream/main
 
-          # 恢复本地配置
-          rm -rf .github/workflows
+          # 恢复本地文件
           mkdir -p .github/workflows
-          cp -r /tmp/wfbak/* .github/workflows/ 2>/dev/null || true
-          cp /tmp/wfbak/wrangler.toml . 2>/dev/null || true
+          cp /tmp/wfbak/fork-sync.yml .github/workflows/ 2>/dev/null || true
+          [ -f /tmp/wfbak/wrangler.toml ] && cp /tmp/wfbak/wrangler.toml . 2>/dev/null || true
           rm -rf /tmp/wfbak
 
-          # 用 API 强制更新 ref（绕过 force push 限制 + workflows 权限）
+          # API 强制更新 ref（绕过 force push 限制）
           COMMIT_SHA=$(git rev-parse HEAD)
-          echo "Syncing to ${COMMIT_SHA:0:7}..."
           API_RESP=$(curl -s -w "\n%{http_code}" -X PATCH \
             -H "Authorization: Bearer ${{ secrets.SYNC_PAT }}" \
             -H "Accept: application/vnd.github+json" \
             "https://api.github.com/repos/${{ github.repository }}/git/refs/heads/main" \
             -d "{\"sha\": \"${COMMIT_SHA}\", \"force\": true}")
           HTTP_CODE=$(echo "$API_RESP" | tail -1)
-          echo "API: HTTP ${HTTP_CODE}"
-
-          # 恢复当前 runner 正在执行的 workflow 文件
-          echo "$SAVED_WORKFLOW" | base64 -d > .github/workflows/fork-sync.yml
-
-          if [ "$HTTP_CODE" = "200" ]; then
-            echo "changed=true" >> $GITHUB_OUTPUT
-          else
-            echo "changed=false" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Deploy to CF
-        if: steps.sync.outputs.changed == 'true'
-        env:
-          CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
-          CF_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
-          CF_WORKER_NAME: ${{ secrets.CF_WORKER_NAME || github.event.repository.name }}
-        run: python3 deploy.py
+          echo "Synced to ${COMMIT_SHA:0:7} (HTTP $HTTP_CODE)"
